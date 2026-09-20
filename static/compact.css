@@ -48,7 +48,7 @@ body.layout-row .week-strip .cards {
 }
 .stack-card.compact, .row-card.compact { width: 140px; }
 .hover-tip {
-  position: fixed; z-index: 80; max-width: min(380px, 80vw);
+  position: fixed; z-index: 100; pointer-events: none; max-width: min(380px, 80vw);
   background: var(--bg-2); color: var(--text); border: 1px solid var(--line);
   border-radius: 12px; padding: 10px 12px; font-size: 12px; box-shadow: var(--shadow);
 }

@@ -23,6 +23,7 @@ from tracker_lib import (
     build_library_schedule,
     build_maps,
     compact_media,
+    db_show_details,
     db_add_library_show,
     db_remove_library_show,
     enrich_show,
@@ -127,10 +128,15 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if path.startswith("/api/show/"):
                 mid = int(path.rsplit("/", 1)[-1])
-                raw = HUB.media_details(mid)
-                media = ((raw.get("data") or {}).get("Media")) or {}
                 lang = load_settings().get("titleLanguage", "english")
-                show = compact_media(media, lang)
+                show = db_show_details(mid, lang)
+                if not show or not show.get("description"):
+                    raw = HUB.media_details(mid)
+                    media = ((raw.get("data") or {}).get("Media")) or {}
+                    refreshed = compact_media(media, lang)
+                    if show.get("episodesSchedule"):
+                        refreshed["episodesSchedule"] = show["episodesSchedule"]
+                    show = refreshed
                 sub_map, dub_map, dub_feed = build_maps()
                 lib = {int(s["id"]): s for s in load_library()}
                 if mid in lib:

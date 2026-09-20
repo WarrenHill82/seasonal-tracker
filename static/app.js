@@ -374,9 +374,53 @@ function renderDaySection(label, shows, { column, accent } = {}) {
   wrap.innerHTML = `<h3>${label}</h3>`;
   const cards = document.createElement("div");
   cards.className = cardsClass();
-  shows.forEach((s) => cards.appendChild(paintCard(s)));
+  shows.forEach((s) => {
+    const card = paintCard(s);
+    card.addEventListener("click", (event) => openShowDetails(s.id, event));
+    cards.appendChild(card);
+  });
   wrap.appendChild(cards);
   return wrap;
+}
+
+async function openShowDetails(showId, event) {
+  const panel = $("#show-details");
+  const content = $("#show-details-content");
+  if (!panel || !content) return;
+  panel.classList.remove("hidden");
+  const x = event?.clientX || innerWidth / 2;
+  const y = event?.clientY || innerHeight / 2;
+  const panelWidth = Math.min(520, innerWidth * 0.92);
+  panel.style.left = `${Math.max(8, Math.min(x, innerWidth - panelWidth - 8))}px`;
+  panel.style.top = `${Math.max(8, Math.min(y, innerHeight - 220))}px`;
+  content.textContent = "Loading show details…";
+  try {
+    const show = await api(`/api/show/${showId}`);
+    const title = document.createElement("h2");
+    title.textContent = show.title || "Show details";
+    const source = document.createElement("a");
+    source.href = show.sourceUrl || `https://anilist.co/anime/${show.id}`;
+    source.target = "_blank";
+    source.rel = "noopener noreferrer";
+    source.textContent = "Open source data";
+    const heading = document.createElement("div");
+    heading.className = "show-details-heading";
+    heading.append(title, source);
+    const description = document.createElement("p");
+    description.className = "show-description";
+    description.textContent = show.description || "No description available.";
+    const list = document.createElement("div");
+    list.className = "episode-list";
+    for (const episode of show.episodesSchedule || []) {
+      const row = document.createElement("div");
+      row.className = "episode-row";
+      row.innerHTML = `<b>Episode ${episode.episode}</b><span>${episode.source.toUpperCase()}</span><time>${episode.airDate}</time>`;
+      list.appendChild(row);
+    }
+    content.replaceChildren(heading, description, list);
+  } catch (error) {
+    content.textContent = `Could not load show details: ${error.message}`;
+  }
 }
 
 function renderBoard() {
@@ -534,20 +578,43 @@ function renderPick(m) {
   } else {
     el.innerHTML = `<img src="${m.cover || ""}" alt="" /><span>${m.title}</span>`;
   }
-  el.addEventListener("mouseenter", () => {
+  const positionPickerTip = (event) => {
     const tip = $("#hover-tip");
-    if (!tip || !m.description) return;
+    if (!tip) return;
+    tip.style.left = `${Math.max(8, Math.min(event.clientX + 14, innerWidth - 380))}px`;
+    tip.style.top = `${Math.max(8, Math.min(event.clientY + 14, innerHeight - 140))}px`;
+  };
+  el.addEventListener("mousemove", positionPickerTip);
+  el.addEventListener("mouseenter", async (event) => {
+    const tip = $("#hover-tip");
+    if (!tip) return;
+    const hoverToken = {};
+    el._hoverToken = hoverToken;
+    tip.replaceChildren();
     const title = document.createElement("strong");
     title.textContent = m.title;
     const description = document.createElement("div");
-    description.textContent = m.description;
+    description.textContent = m.description || "Loading description…";
     tip.replaceChildren(title, description);
     tip.classList.remove("hidden");
-    const rect = el.getBoundingClientRect();
-    tip.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - 380))}px`;
-    tip.style.top = `${Math.min(rect.bottom + 8, innerHeight - 140)}px`;
+    positionPickerTip(event);
+    if (!m.description) {
+      try {
+        const details = await api(`/api/show/${m.id}`);
+        m.description = details.description || "";
+      } catch (_) {
+        if (el._hoverToken === hoverToken) description.textContent = "Description unavailable.";
+        return;
+      }
+    }
+    if (el._hoverToken !== hoverToken || !m.description || !el.matches(":hover")) return;
+    tip.replaceChildren(title, description);
+    description.textContent = m.description;
   });
-  el.addEventListener("mouseleave", () => $("#hover-tip")?.classList.add("hidden"));
+  el.addEventListener("mouseleave", () => {
+    el._hoverToken = null;
+    $("#hover-tip")?.classList.add("hidden");
+  });
   el.addEventListener("click", () => {
     if (el.classList.contains("in")) removeShow(m.id);
     else addShow(m);
@@ -651,6 +718,16 @@ function wire() {
   }
 
   wireSelects();
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    $("#drawer").classList.add("hidden");
+    $("#settings").classList.add("hidden");
+    $("#show-details").classList.add("hidden");
+    if (notifyPanel) notifyPanel.classList.add("hidden");
+    $("#hover-tip").classList.add("hidden");
+    closeSelects();
+    syncDrawerFade();
+  });
   $("#btn-layout").addEventListener("click", async () => {
     const next = state.settings.layout === "stacks" ? "rows" : "stacks";
     state.settings = await api("/api/settings", { method: "POST", body: JSON.stringify({ layout: next }) });
@@ -677,6 +754,7 @@ function wire() {
     $("#settings").classList.add("hidden");
     syncDrawerFade();
   });
+  $("#show-details-close").addEventListener("click", () => $("#show-details").classList.add("hidden"));
   $("#settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const form = ev.target;

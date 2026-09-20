@@ -368,6 +368,50 @@ def db_library_ids() -> set[int]:
     return {int(row[0]) for row in rows}
 
 
+def db_show_details(show_id: int, lang: str = "english") -> dict:
+    """Return persisted media metadata and normalized episode air dates."""
+    ensure_database()
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT raw_json FROM media WHERE id = ?", (int(show_id),)).fetchone()
+        schedule_rows = conn.execute(
+            """
+            SELECT episode, air_date, air_ts, source
+            FROM weekly_schedule
+            WHERE anime_id = ?
+            ORDER BY air_ts, episode, source
+            """,
+            (int(show_id),),
+        ).fetchall()
+    if not row:
+        return {}
+    media = json.loads(row[0])
+    show = compact_media(media, lang)
+    show["description"] = media.get("description") or ""
+    show["sourceUrl"] = media.get("siteUrl") or f"https://anilist.co/anime/{int(show_id)}"
+    episodes: dict[tuple[int, str], dict] = {}
+    for node in ((media.get("airingSchedule") or {}).get("nodes") or []):
+        when = parse_airing(node.get("airingAt"))
+        episode = int(node.get("episode") or 0)
+        if when is None or episode <= 0:
+            continue
+        episodes[(episode, "sub")] = {
+            "episode": episode,
+            "airDate": when.astimezone(timezone.utc).date().isoformat(),
+            "airAt": when.astimezone(timezone.utc).isoformat(),
+            "source": "sub",
+        }
+    for episode, air_date, air_ts, source in schedule_rows:
+        kind = "dub" if source == "dub" else "sub"
+        episodes[(int(episode), kind)] = {
+            "episode": int(episode),
+            "airDate": air_date,
+            "airAt": datetime.fromtimestamp(int(air_ts), timezone.utc).isoformat(),
+            "source": kind,
+        }
+    show["episodesSchedule"] = sorted(episodes.values(), key=lambda item: (item["airAt"], item["source"]))
+    return show
+
+
 def populate_weekly_schedule(
     year: int,
     month: int,

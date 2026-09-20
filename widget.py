@@ -8,7 +8,7 @@ import os
 import sys
 import threading
 import webbrowser
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.error import HTTPError
@@ -20,10 +20,12 @@ from tracker_lib import (
     DEFAULT_SETTINGS,
     LIBRARY_PATH,
     STATIC,
+    build_library_schedule,
     build_maps,
     compact_media,
+    db_add_library_show,
+    db_remove_library_show,
     enrich_show,
-    event_in_range,
     HUB,
     load_library,
     load_settings,
@@ -33,10 +35,9 @@ from tracker_lib import (
     pick_title,
     save_json,
     save_library,
-    schedule_window,
+    schedule_view_payload,
     season_of,
     SETTINGS_PATH,
-    today_bounds,
 )
 
 class Handler(SimpleHTTPRequestHandler):
@@ -116,7 +117,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if path == "/api/schedule":
                 offset = int((q.get("offset") or ["0"])[0] or 0)
-                self._send(200, self._schedule_payload((q.get("range") or ["today"])[0], offset=offset))
+                self._send(200, schedule_view_payload((q.get("range") or ["today"])[0], offset=offset))
                 return
             if path.startswith("/api/show/"):
                 mid = int(path.rsplit("/", 1)[-1])
@@ -174,11 +175,15 @@ class Handler(SimpleHTTPRequestHandler):
                         }
                     )
                     save_library(shows)
+                    db_add_library_show(shows[-1])
+                    build_library_schedule()
                 self._send(200, self._library_payload())
                 return
             if parsed.path == "/api/library/remove":
                 sid = int(body["id"])
                 save_library([s for s in load_library() if int(s["id"]) != sid])
+                db_remove_library_show(sid)
+                build_library_schedule()
                 self._send(200, self._library_payload())
                 return
             if parsed.path == "/api/library/progress":
@@ -212,57 +217,6 @@ class Handler(SimpleHTTPRequestHandler):
             enriched.append(enrich_show(item, sub_map, dub_map, dub_feed))
         enriched.sort(key=lambda s: (s.get("nextEvents") or [{"ts": 10**12}])[0]["ts"])
         return {"shows": enriched}
-
-    def _schedule_payload(self, range_key: str, offset: int = 0) -> dict:
-        settings = load_settings()
-        week_start = settings.get("weekStart", "sunday")
-        if range_key == "today":
-            start, end = today_bounds()
-            label = start.strftime("%A %-d %b")
-        elif range_key in {"this_week", "next_week", "week_after"}:
-            start, end, label = schedule_window(range_key, week_start, offset=offset)
-        else:
-            start, end = today_bounds()
-            label = "Today"
-
-        payload = self._library_payload()
-        days: dict[str, list] = {}
-        current = start
-        while current < end:
-            key = current.strftime("%Y-%m-%d")
-            days[key] = []
-            current += timedelta(days=1)
-
-        for show in payload["shows"]:
-            tagged_day = show.get("airDay")
-            if not tagged_day:
-                continue
-            if tagged_day not in days:
-                continue
-            bucket = days[tagged_day]
-            entry = dict(show)
-            entry["focus"] = {"at": f"{tagged_day}T00:00:00Z", "ts": int(datetime.fromisoformat(f"{tagged_day}T00:00:00+00:00").timestamp())}
-            entry["focusAll"] = [entry["focus"]]
-            bucket.append(entry)
-        for items in days.values():
-            items.sort(key=lambda s: (s.get("focus") or {}).get("ts") or 0)
-        ordered = [
-            {
-                "date": key,
-                "label": datetime.fromisoformat(key).strftime("%a %-d"),
-                "shows": items,
-            }
-            for key, items in sorted(days.items())
-        ]
-        return {
-            "range": range_key,
-            "label": label,
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-            "days": ordered,
-            "count": sum(len(d["shows"]) for d in ordered),
-        }
-
 
 def open_window(url: str, width: int, height: int) -> None:
     """Dev fallback: open a Chrome --app window when launched from a terminal.
@@ -302,6 +256,10 @@ def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     STATIC.mkdir(parents=True, exist_ok=True)
+    try:
+        build_library_schedule()
+    except Exception as exc:  # noqa: BLE001
+        print(f"Schedule refresh skipped: {exc}", file=sys.stderr)
 
     port = int(os.environ.get("SEASONAL_TRACKER_PORT", "8765"))
     host = os.environ.get("SEASONAL_TRACKER_HOST", "127.0.0.1")

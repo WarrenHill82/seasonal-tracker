@@ -8,9 +8,9 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -368,11 +368,16 @@ def db_library_ids() -> set[int]:
     return {int(row[0]) for row in rows}
 
 
-def populate_weekly_schedule(year: int, month: int, source: str = "sub") -> int:
+def populate_weekly_schedule(
+    year: int,
+    month: int,
+    source: str = "sub",
+    library_ids: set[int] | None = None,
+) -> int:
     ensure_database()
     now_ts = int(time.time())
     raw_records = HUB.sub_schedule() if source == "sub" else HUB.dub_schedule()
-    library_ids = db_library_ids()
+    library_ids = db_library_ids() if library_ids is None else {int(value) for value in library_ids}
     records: list[dict] = []
     for item in raw_records:
         if not isinstance(item, dict):
@@ -449,6 +454,222 @@ def populate_weekly_schedule(year: int, month: int, source: str = "sub") -> int:
                 inserted += 1
         conn.commit()
     return inserted
+
+
+def populate_schedule_from_media_history(
+    library_ids: set[int],
+    date_ranges: Iterable[tuple[date, date]],
+) -> int:
+    """Add historical AniList airing nodes to the normalized schedule table."""
+    if not library_ids:
+        return 0
+    inserted = 0
+    placeholders = ", ".join("?" for _ in library_ids)
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            f"SELECT id, raw_json FROM media WHERE id IN ({placeholders})",
+            tuple(sorted(library_ids)),
+        ).fetchall()
+        for anime_id, raw_json in rows:
+            media = json.loads(raw_json)
+            title = pick_title(media.get("title"), "english") or pick_title(media.get("title"), "romaji") or "Unknown"
+            nodes = ((media.get("airingSchedule") or {}).get("nodes") or [])
+            for node in nodes:
+                when = parse_airing(node.get("airingAt"))
+                episode = int(node.get("episode") or 0)
+                if when is None or episode <= 0:
+                    continue
+                air_ts = int(when.timestamp())
+                if not any(start <= when.astimezone(timezone.utc).date() < end for start, end in date_ranges):
+                    continue
+                air_date = when.astimezone(timezone.utc).date()
+                conn.execute(
+                    """
+                    INSERT INTO weekly_schedule (
+                        year, month, week_num, anime_id, anime_title,
+                        episode, air_day, air_date, air_ts, source, fetched_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(year, month, week_num, anime_id, episode)
+                    DO UPDATE SET
+                        anime_title = excluded.anime_title,
+                        air_day = excluded.air_day,
+                        air_date = excluded.air_date,
+                        air_ts = excluded.air_ts,
+                        source = excluded.source,
+                        fetched_at = excluded.fetched_at
+                    """,
+                    (
+                        air_date.year,
+                        air_date.month,
+                        week_number_for_month(air_date),
+                        int(anime_id),
+                        title,
+                        episode,
+                        when.strftime("%A"),
+                        air_date.isoformat(),
+                        air_ts,
+                        "anilist_history",
+                        int(time.time()),
+                    ),
+                )
+                inserted += 1
+        conn.commit()
+    return inserted
+
+
+def _month_ranges(start: date) -> list[tuple[date, date]]:
+    """Return the current and next calendar month for a local date."""
+    current = start.replace(day=1)
+    if current.month == 12:
+        following = date(current.year + 1, 1, 1)
+    else:
+        following = date(current.year, current.month + 1, 1)
+    if following.month == 12:
+        after_following = date(following.year + 1, 1, 1)
+    else:
+        after_following = date(following.year, following.month + 1, 1)
+    return [(current, following), (following, after_following)]
+
+
+def build_library_schedule(
+    library_ids: Iterable[int] | None = None,
+    date_ranges: Iterable[tuple[date, date]] | None = None,
+    sources: Iterable[str] = ("sub", "dub"),
+) -> dict[str, int]:
+    """Build media and schedule rows for library IDs over selected date ranges.
+
+    The default window is the current and next local calendar month. Callers can
+    provide half-open ``(start, end)`` date ranges to rebuild another window.
+    This path intentionally owns the orchestration: media is loaded first, then
+    schedule rows are rebuilt from the requested feed data.
+    """
+    ensure_database()
+    ids = {int(value) for value in (library_ids if library_ids is not None else db_library_ids())}
+    ranges = list(date_ranges) if date_ranges is not None else _month_ranges(datetime.now().astimezone().date())
+    if not ranges:
+        return {"media": 0, "schedule": 0}
+    for start, end in ranges:
+        if start >= end:
+            raise ValueError("date ranges must have start before end")
+    if not ids:
+        return {"media": 0, "schedule": 0}
+
+    media_count = 0
+    for media_id in sorted(ids):
+        raw = HUB.media_details(media_id)
+        media = ((raw or {}).get("data") or {}).get("Media") or {}
+        if not media:
+            continue
+        season = media.get("season") or "UNKNOWN"
+        season_year = int(media.get("seasonYear") or datetime.now().year)
+        store_media_records([media], season, season_year)
+        media_count += 1
+
+    with sqlite3.connect(DB_PATH) as conn:
+        placeholders = ", ".join("?" for _ in ids)
+        conn.execute(f"DELETE FROM weekly_schedule WHERE anime_id IN ({placeholders})", tuple(sorted(ids)))
+        conn.commit()
+
+    schedule_count = 0
+    months: set[tuple[int, int]] = set()
+    for start, end in ranges:
+        month = start.replace(day=1)
+        last_month = (end - timedelta(days=1)).replace(day=1)
+        while month <= last_month:
+            months.add((month.year, month.month))
+            if month.month == 12:
+                month = date(month.year + 1, 1, 1)
+            else:
+                month = date(month.year, month.month + 1, 1)
+    for year, month in months:
+        for source in sources:
+            schedule_count += populate_weekly_schedule(year, month, source, library_ids=ids)
+    schedule_count += populate_schedule_from_media_history(ids, ranges)
+
+    clauses = []
+    values: list[Any] = []
+    for start, end in ranges:
+        clauses.append("(air_date >= ? AND air_date < ?)")
+        values.extend((start.isoformat(), end.isoformat()))
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            f"DELETE FROM weekly_schedule WHERE anime_id IN ({placeholders}) AND NOT ({' OR '.join(clauses)})",
+            tuple(sorted(ids)) + tuple(values),
+        )
+        conn.commit()
+        stored = conn.execute(
+            f"SELECT COUNT(*) FROM weekly_schedule WHERE anime_id IN ({placeholders}) AND ({' OR '.join(clauses)})",
+            tuple(sorted(ids)) + tuple(values),
+        ).fetchone()[0]
+    return {"media": media_count, "schedule": int(stored)}
+
+
+def schedule_view_payload(range_key: str, offset: int = 0) -> dict:
+    """Read a UI schedule payload from the isolated SQLite schedule service."""
+    settings = load_settings()
+    week_start = settings.get("weekStart", "sunday")
+    if range_key == "today":
+        start, end = today_bounds()
+        label = start.strftime("%A %-d %b")
+    elif range_key in {"this_week", "next_week", "week_after"}:
+        start, end, label = schedule_window(range_key, week_start, offset=offset)
+    else:
+        start, end = today_bounds()
+        label = "Today"
+
+    days: dict[str, list] = {}
+    current = start
+    while current < end:
+        key = current.strftime("%Y-%m-%d")
+        days[key] = []
+        current += timedelta(days=1)
+
+    library = {int(show["id"]): show for show in load_library() if show.get("id") is not None}
+    start_ts = int(start.timestamp())
+    end_ts = int(end.timestamp())
+    ensure_database()
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT anime_id, episode, air_date, air_ts, source
+            FROM weekly_schedule
+            WHERE air_ts >= ? AND air_ts < ?
+            ORDER BY air_ts, anime_id, episode
+            """,
+            (start_ts, end_ts),
+        ).fetchall()
+
+    for anime_id, episode, air_date, air_ts, source in rows:
+        show = library.get(int(anime_id))
+        if show is None or air_date not in days:
+            continue
+        item = enrich_show(dict(show), {}, {}, {})
+        focus = {
+            "kind": "sub" if source == "anilist_history" else source,
+            "episode": episode,
+            "at": datetime.fromtimestamp(air_ts, timezone.utc).isoformat(),
+            "ts": air_ts,
+        }
+        item["focus"] = focus
+        item["focusAll"] = [focus]
+        days[air_date].append(item)
+
+    ordered = [
+        {
+            "date": key,
+            "label": datetime.fromisoformat(key).strftime("%a %-d"),
+            "shows": items,
+        }
+        for key, items in sorted(days.items())
+    ]
+    return {
+        "range": range_key,
+        "label": label,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "days": ordered,
+        "count": sum(len(day["shows"]) for day in ordered),
+    }
 
 
 def db_get_library() -> list[dict]:

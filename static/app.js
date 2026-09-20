@@ -584,14 +584,6 @@ function wire() {
   }
 
   wireSelects();
-  document.querySelectorAll("#ranges button").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll("#ranges button").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      state.range = btn.dataset.range;
-      loadSchedule().catch((e) => toast(e.message));
-    });
-  });
   $("#btn-layout").addEventListener("click", async () => {
     const next = state.settings.layout === "stacks" ? "rows" : "stacks";
     state.settings = await api("/api/settings", { method: "POST", body: JSON.stringify({ layout: next }) });

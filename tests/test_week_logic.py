@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from tracker_lib import enrich_show, jst_weekday, rolling_week_bounds, schedule_window
 
@@ -184,3 +184,52 @@ def test_populate_weekly_schedule_omits_missing_source_row(monkeypatch, tmp_path
         ).fetchall()
     assert (42, "Saved Show", "sub", "2025-09-13") in rows
     assert all(row[0] != 99 for row in rows)
+
+
+def test_build_library_schedule_loads_media_before_filtered_schedule(monkeypatch, tmp_path) -> None:
+    import sqlite3
+
+    import tracker_lib
+
+    monkeypatch.setattr(tracker_lib, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(tracker_lib, "DB_PATH", tmp_path / "tracker.db")
+    monkeypatch.setattr(tracker_lib, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(
+        tracker_lib.HUB,
+        "media_details",
+        lambda media_id: {
+            "data": {
+                "Media": {
+                    "id": media_id,
+                    "title": {"english": "Demo", "romaji": "Demo"},
+                    "season": "FALL",
+                    "seasonYear": 2026,
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(
+        tracker_lib.HUB,
+        "sub_schedule",
+        lambda: [
+            {
+                "id": 7,
+                "title": {"english": "Demo", "romaji": "Demo"},
+                "airingSchedule": {"nodes": [{"episode": 1, "airingAt": 1790121600}]},
+            }
+        ],
+    )
+
+    result = tracker_lib.build_library_schedule(
+        library_ids=[7],
+        date_ranges=[(date(2026, 9, 1), date(2026, 10, 1))],
+        sources=("sub",),
+    )
+
+    with sqlite3.connect(tracker_lib.DB_PATH) as conn:
+        media_count = conn.execute("SELECT COUNT(*) FROM media").fetchone()[0]
+        schedule_count = conn.execute("SELECT COUNT(*) FROM weekly_schedule").fetchone()[0]
+
+    assert result == {"media": 1, "schedule": 1}
+    assert media_count == 1
+    assert schedule_count == 1

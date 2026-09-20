@@ -54,7 +54,7 @@
     if (jump) jump.classList.toggle('active', isWeek() && offset === 0);
     if (pager) pager.classList.toggle('is-on', isWeek());
     const prev = document.querySelector('#week-prev');
-    if (prev) prev.disabled = isWeek() && offset <= 0;
+    if (prev) prev.disabled = false;
     // Date text is written by week-fix.js from the same offset.
   }
 
@@ -113,7 +113,6 @@
     loadWeek();
   });
   document.querySelector('#week-prev').addEventListener('click', function () {
-    if (offset <= 0) return;
     offset -= 1;
     loadWeek();
   });

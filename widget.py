@@ -37,6 +37,7 @@ from tracker_lib import (
     save_library,
     schedule_view_payload,
     season_of,
+    sync_library_schedule,
     SETTINGS_PATH,
 )
 
@@ -110,6 +111,9 @@ class Handler(SimpleHTTPRequestHandler):
                 season = (q.get("season") or [None])[0]
                 year = int((q.get("year") or ["0"])[0]) or None
                 raw = HUB.search(term, season=season, year=year)
+                page = ((raw.get("data") or {}).get("Page") or {})
+                if not page.get("media") and (season or year):
+                    raw = HUB.search(term)
                 lang = load_settings().get("titleLanguage", "english")
                 media = [compact_media(m, lang) for m in (((raw.get("data") or {}).get("Page") or {}).get("media") or [])]
                 selected = {int(s["id"]) for s in load_library()}
@@ -145,6 +149,9 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             body = self._read_json()
+            if parsed.path == "/api/sync":
+                self._send(200, sync_library_schedule())
+                return
             if parsed.path == "/api/settings":
                 settings = load_settings()
                 settings.update({k: v for k, v in body.items() if k in DEFAULT_SETTINGS or k in {"layout", "theme"}})

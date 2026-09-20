@@ -24,7 +24,6 @@
           <svg class="i-row" viewBox="0 0 20 20" width="16" height="16"><rect x="1" y="3" width="18" height="3" rx="1"/><rect x="1" y="8.5" width="18" height="3" rx="1"/><rect x="1" y="14" width="18" height="3" rx="1"/></svg>
           <svg class="i-bar" viewBox="0 0 20 20" width="16" height="16"><rect x="3" y="1" width="3" height="18" rx="1"/><rect x="8.5" y="1" width="3" height="18" rx="1"/><rect x="14" y="1" width="3" height="18" rx="1"/></svg>
         </button>
-        <button type="button" id="btn-float" class="icon-btn" aria-label="Float">⧉</button>
         <button type="button" id="btn-settings" class="icon-btn" aria-label="Settings">⚙</button>
         <button type="button" id="btn-notifications" class="icon-btn notify-btn" aria-label="Notifications">
           🔔
@@ -36,7 +35,7 @@
   <aside id="drawer" class="drawer drawer-picker hidden">
     <div class="drawer-head"><h2>Add seasonal shows</h2><button type="button" id="drawer-close">Close</button></div>
     <div class="picker-bar">
-      <select id="season-select"></select>
+      <div id="season-select" class="select season-select"></div>
       <input id="search" type="search" placeholder="Search titles…" />
       <div class="seg" id="picker-layout"><button type="button" data-pick="tiles" class="active">Tiles</button><button type="button" data-pick="rows">Rows</button></div>
     </div>

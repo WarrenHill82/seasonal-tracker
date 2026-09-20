@@ -61,7 +61,7 @@
   function applyLibraryLayout() {
     if (state.range === 'library') {
       if (layoutBeforeLibrary == null) layoutBeforeLibrary = state.settings.layout;
-      state.settings.layout = 'stacks'; // bar, not persisted
+      state.settings.layout = 'rows'; // rows, not persisted
     } else if (layoutBeforeLibrary != null) {
       state.settings.layout = layoutBeforeLibrary;
       layoutBeforeLibrary = null;
@@ -124,10 +124,6 @@
   const origRender = window.renderBoard;
   window.renderBoard = function () {
     if (typeof origRender === 'function') origRender();
-    if (state.range === 'library') {
-      document.body.classList.add('layout-bar');
-      document.body.classList.remove('layout-row');
-    }
     paintActive();
   };
 

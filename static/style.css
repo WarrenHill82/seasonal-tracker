@@ -306,6 +306,21 @@ button.active:hover { background: var(--text); }
   border: 1px dashed var(--line); border-radius: var(--radius);
 }
 
+.sync-panel {
+  position: fixed;
+  left: 50%;
+  bottom: 38px;
+  transform: translateX(-50%);
+  z-index: 15;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--bg-2) 92%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.sync-panel { display: flex; gap: 8px; }
+.sync-panel button { min-width: 92px; }
+
 .drawer {
   position: fixed;
   inset: 12px 12px 12px auto;

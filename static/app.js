@@ -5,6 +5,7 @@ const state = {
   schedule: null,
   library: [],
   pickerPage: 1,
+  pickerHasNext: false,
   pickerSeason: null,
   pickerYear: null,
   searchTimer: null,
@@ -388,6 +389,24 @@ function renderBoard() {
       return;
     }
     board.appendChild(renderDaySection(`Pinned shows · ${state.library.length}`, state.library));
+    const panel = document.createElement("div");
+    panel.className = "sync-panel";
+    panel.innerHTML = '<button type="button" id="btn-add-library">Add shows</button><button type="button" id="btn-sync">Sync</button>';
+    board.appendChild(panel);
+    panel.querySelector("#btn-add-library").addEventListener("click", () => $("#btn-add").click());
+    panel.querySelector("#btn-sync").addEventListener("click", async () => {
+      const button = panel.querySelector("#btn-sync");
+      button.disabled = true;
+      button.textContent = "Syncing…";
+      try {
+        await api("/api/sync", { method: "POST", body: "{}" });
+        toast("Library schedule synced");
+        await loadSchedule();
+      } finally {
+        button.disabled = false;
+        button.textContent = "Sync";
+      }
+    });
     return;
   }
 
@@ -471,12 +490,36 @@ function fillSeasonSelect() {
   const year = state.meta.year;
   const opts = [];
   for (let y = year - 1; y <= year + 1; y += 1) {
-    opts.push(`<optgroup label="${y}">`);
-    seasons.forEach((s) => opts.push(`<option value="${s}-${y}">${s} ${y}</option>`));
-    opts.push("</optgroup>");
+    seasons.forEach((s) => opts.push(`<li data-value="${s}-${y}">${s} ${y}</li>`));
   }
-  sel.innerHTML = opts.join("");
-  sel.value = `${state.pickerSeason}-${state.pickerYear}`;
+  sel.innerHTML = `<button type="button" class="select-btn" aria-label="Season"></button><ul class="select-menu">${opts.join("")}</ul>`;
+  const current = `${state.pickerSeason}-${state.pickerYear}`;
+  const button = sel.querySelector(".select-btn");
+  const items = [...sel.querySelectorAll("li")];
+  const choose = (value) => {
+    const item = items.find((li) => li.dataset.value === value) || items[0];
+    state.pickerSeason = item.dataset.value.split("-")[0];
+    state.pickerYear = Number(item.dataset.value.split("-")[1]);
+    state.pickerPage = 1;
+    state.pickerHasNext = false;
+    button.textContent = item.textContent;
+    items.forEach((li) => li.classList.toggle("active", li === item));
+    sel.classList.remove("open");
+    loadPicker();
+  };
+  button.textContent = current.replace("-", " ");
+  button.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const willOpen = !sel.classList.contains("open");
+    closeSelects();
+    sel.classList.toggle("open", willOpen);
+  });
+  items.forEach((item) => item.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    choose(item.dataset.value);
+  }));
+  choose(current);
 }
 
 function renderPick(m) {
@@ -491,6 +534,20 @@ function renderPick(m) {
   } else {
     el.innerHTML = `<img src="${m.cover || ""}" alt="" /><span>${m.title}</span>`;
   }
+  el.addEventListener("mouseenter", () => {
+    const tip = $("#hover-tip");
+    if (!tip || !m.description) return;
+    const title = document.createElement("strong");
+    title.textContent = m.title;
+    const description = document.createElement("div");
+    description.textContent = m.description;
+    tip.replaceChildren(title, description);
+    tip.classList.remove("hidden");
+    const rect = el.getBoundingClientRect();
+    tip.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - 380))}px`;
+    tip.style.top = `${Math.min(rect.bottom + 8, innerHeight - 140)}px`;
+  });
+  el.addEventListener("mouseleave", () => $("#hover-tip")?.classList.add("hidden"));
   el.addEventListener("click", () => {
     if (el.classList.contains("in")) removeShow(m.id);
     else addShow(m);
@@ -507,12 +564,16 @@ async function loadPicker(query) {
     if (query) {
       media = (await api(`/api/search?q=${encodeURIComponent(query)}&season=${state.pickerSeason}&year=${state.pickerYear}`)).media;
       $("#page-info").textContent = `${media.length} results`;
+      state.pickerHasNext = false;
     } else {
       const data = await api(`/api/season?season=${state.pickerSeason}&year=${state.pickerYear}&page=${state.pickerPage}`);
       media = data.media;
       const p = data.pageInfo || {};
+      state.pickerHasNext = Boolean(p.hasNextPage);
       $("#page-info").textContent = `${state.pickerSeason} ${state.pickerYear} · page ${p.currentPage || state.pickerPage}`;
     }
+    $("#page-prev").disabled = !query && state.pickerPage <= 1;
+    $("#page-next").disabled = Boolean(query) || !state.pickerHasNext;
     grid.innerHTML = "";
     media.forEach((m) => grid.appendChild(renderPick(m)));
     if (!media.length) grid.innerHTML = "<p class='hint'>No titles on this page.</p>";
@@ -541,6 +602,7 @@ function setSelectValue(root, value) {
 function wireSelects() {
   document.querySelectorAll(".select").forEach((root) => {
     const btn = root.querySelector(".select-btn");
+    if (!btn) return;
     btn.addEventListener("click", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
@@ -595,12 +657,13 @@ function wire() {
     applyTheme();
     renderBoard();
   });
-  $("#btn-add").addEventListener("click", () => {
+  const openPicker = () => {
     $("#settings").classList.add("hidden");
     $("#drawer").classList.remove("hidden");
     syncDrawerFade();
     loadPicker();
-  });
+  };
+  $("#btn-add").addEventListener("click", openPicker);
   $("#drawer-close").addEventListener("click", () => {
     $("#drawer").classList.add("hidden");
     syncDrawerFade();
@@ -638,13 +701,6 @@ function wire() {
       loadPicker(q.length >= 2 ? q : null);
     });
   });
-  $("#season-select").addEventListener("change", (ev) => {
-    const [s, y] = ev.target.value.split("-");
-    state.pickerSeason = s;
-    state.pickerYear = Number(y);
-    state.pickerPage = 1;
-    loadPicker();
-  });
   $("#search").addEventListener("input", (ev) => {
     clearTimeout(state.searchTimer);
     const q = ev.target.value.trim();
@@ -655,6 +711,7 @@ function wire() {
     loadPicker();
   });
   $("#page-next").addEventListener("click", () => {
+    if (!state.pickerHasNext) return;
     state.pickerPage += 1;
     loadPicker();
   });

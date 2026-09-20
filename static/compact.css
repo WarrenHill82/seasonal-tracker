@@ -20,9 +20,19 @@
   width: 26px; height: 26px; padding: 0; border-radius: 7px;
   display: grid; place-items: center; font-size: 13px;
 }
-.picker-bar select { color: var(--text); min-width: 150px; }
-.picker-bar select option,
-.picker-bar select optgroup { background: var(--card); color: var(--text); }
+.picker-bar .season-select { min-width: 150px; }
+.picker-bar .season-select .select-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  max-height: min(50vh, 360px);
+  overflow-y: auto;
+  margin: 0;
+}
+.picker-grid .pick:hover { border-color: var(--accent); }
+.picker-grid .pick + #hover-tip { line-height: 1.45; }
 #btn-layout .i-bar { display: none; fill: currentColor; }
 #btn-layout .i-row { display: block; fill: currentColor; }
 #btn-layout.is-bar .i-row { display: none; }

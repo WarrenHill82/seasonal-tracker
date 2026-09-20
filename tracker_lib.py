@@ -612,6 +612,23 @@ def build_library_schedule(
     return {"media": media_count, "schedule": int(stored)}
 
 
+def sync_library_schedule() -> dict[str, int]:
+    """Reconcile media and schedule tables with the authoritative library table."""
+    ensure_database()
+    library_ids = db_library_ids()
+    with sqlite3.connect(DB_PATH) as conn:
+        if library_ids:
+            placeholders = ", ".join("?" for _ in library_ids)
+            params = tuple(sorted(library_ids))
+            conn.execute(f"DELETE FROM media WHERE id NOT IN ({placeholders})", params)
+            conn.execute(f"DELETE FROM weekly_schedule WHERE anime_id NOT IN ({placeholders})", params)
+        else:
+            conn.execute("DELETE FROM media")
+            conn.execute("DELETE FROM weekly_schedule")
+        conn.commit()
+    return build_library_schedule(library_ids=library_ids)
+
+
 def schedule_view_payload(range_key: str, offset: int = 0) -> dict:
     """Read a UI schedule payload from the isolated SQLite schedule service."""
     settings = load_settings()
@@ -639,15 +656,27 @@ def schedule_view_payload(range_key: str, offset: int = 0) -> dict:
         for show_id, show in library.items()
     }
     history_weekdays: dict[int, int] = {}
+    first_air_ts: dict[int, int] = {}
     with sqlite3.connect(DB_PATH) as conn:
         history_rows = conn.execute(
             f"SELECT anime_id, MAX(air_ts) FROM weekly_schedule WHERE source = 'anilist_history' AND anime_id IN ({', '.join('?' for _ in library)}) GROUP BY anime_id",
             tuple(sorted(library)),
         ).fetchall() if library else []
+        first_rows = conn.execute(
+            f"SELECT anime_id, MIN(air_ts) FROM weekly_schedule WHERE anime_id IN ({', '.join('?' for _ in library)}) GROUP BY anime_id",
+            tuple(sorted(library)),
+        ).fetchall() if library else []
     for media_id, air_ts in history_rows:
         history_weekdays[int(media_id)] = (datetime.fromtimestamp(int(air_ts), timezone.utc).astimezone().weekday() + 1) % 7
+    for media_id, air_ts in first_rows:
+        first_air_ts[int(media_id)] = int(air_ts)
     start_ts = int(start.timestamp())
     end_ts = int(end.timestamp())
+    progress_end_ts = (
+        int(datetime.now().astimezone().timestamp())
+        if range_key == "this_week" and offset == 0
+        else end_ts
+    )
     ensure_database()
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
@@ -666,17 +695,39 @@ def schedule_view_payload(range_key: str, offset: int = 0) -> dict:
             WHERE air_ts < ?
             GROUP BY anime_id, source
             """,
-            (end_ts,),
+            (progress_end_ts,),
         ).fetchall()
 
     progress: dict[int, dict[str, int]] = {}
+    latest_progress: dict[int, dict[str, tuple[int, int]]] = {}
     for anime_id, source, episode in progress_rows:
         progress.setdefault(int(anime_id), {})["dub" if source == "dub" else "sub"] = int(episode or 0)
+
+    with sqlite3.connect(DB_PATH) as conn:
+        source_rows = conn.execute(
+            f"""
+            SELECT anime_id, source, episode, air_ts
+            FROM weekly_schedule
+            WHERE anime_id IN ({', '.join('?' for _ in library)})
+            ORDER BY air_ts
+            """,
+            tuple(sorted(library)),
+        ).fetchall() if library else []
+    for anime_id, source, episode, air_ts in source_rows:
+        kind = "dub" if source == "dub" else "sub"
+        latest_progress.setdefault(int(anime_id), {})[kind] = (int(episode or 0), int(air_ts))
 
     def progress_for(show: dict, kind: str) -> int | None:
         value = progress.get(int(show["id"]), {}).get(kind)
         if value is None:
             value = show.get("dubAired" if kind == "dub" else "subAired")
+        latest = latest_progress.get(int(show["id"]), {}).get(kind)
+        if latest and progress_end_ts > latest[1]:
+            weekly_steps = max(0, (progress_end_ts - latest[1] - 1) // (7 * 24 * 60 * 60))
+            value = max(value or 0, latest[0] + weekly_steps)
+        total = int(show.get("episodes") or 0)
+        if total and value is not None:
+            value = min(int(value), total)
         return value
 
     for anime_id, episode, air_date, air_ts, source in rows:
@@ -713,6 +764,8 @@ def schedule_view_payload(range_key: str, offset: int = 0) -> dict:
     }
     for show_id, show in enriched_library.items():
         if show_id in displayed_ids:
+            continue
+        if first_air_ts.get(show_id, end_ts) >= end_ts:
             continue
         air_dow = show.get("airDow")
         if air_dow is None:
@@ -961,6 +1014,7 @@ class DataHub:
             pageInfo { currentPage hasNextPage lastPage total }
             media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: POPULARITY_DESC) {
               id idMal title { romaji english native }
+              description(asHtml: false)
               episodes format status season seasonYear genres averageScore duration isAdult siteUrl
               coverImage { large medium color }
               nextAiringEpisode { episode airingAt timeUntilAiring }
@@ -975,12 +1029,13 @@ class DataHub:
         store_media_records(media_page, season, year)
         return raw
 
-        def search(self, q: str, season: str | None = None, year: int | None = None) -> dict:
+    def search(self, q: str, season: str | None = None, year: int | None = None) -> dict:
                 query = """
                 query ($q: String, $season: MediaSeason, $seasonYear: Int) {
                     Page(page: 1, perPage: 20) {
                         media(search: $q, season: $season, seasonYear: $seasonYear, type: ANIME, sort: SEARCH_MATCH) {
                             id idMal title { romaji english native }
+                            description(asHtml: false)
                             episodes format status season seasonYear genres averageScore isAdult siteUrl
                             coverImage { large medium color }
                             nextAiringEpisode { episode airingAt timeUntilAiring }
@@ -988,7 +1043,31 @@ class DataHub:
                     }
                 }
                 """
-                return self.anilist(query, {"q": q, "season": season, "seasonYear": year})
+                raw = self.anilist(query, {"q": q, "season": season, "seasonYear": year})
+                page = ((raw.get("data") or {}).get("Page") or {})
+                if page.get("media"):
+                    return raw
+
+                term = q.casefold().strip()
+                if not term:
+                    return raw
+                local_media = []
+                with sqlite3.connect(DB_PATH) as conn:
+                    rows = conn.execute("SELECT raw_json FROM media").fetchall()
+                for (raw_json,) in rows:
+                    try:
+                        media = json.loads(raw_json)
+                    except json.JSONDecodeError:
+                        continue
+                    title = media.get("title") or {}
+                    haystack = " ".join(
+                        str(value) for value in (
+                            title.get("english"), title.get("romaji"), title.get("native"), media.get("description")
+                        ) if value
+                    ).casefold()
+                    if term in haystack:
+                        local_media.append(media)
+                return {"data": {"Page": {"media": local_media[:20]}}}
 
     def media_details(self, media_id: int) -> dict:
         key = f"media-{media_id}.json"
@@ -1065,6 +1144,7 @@ def compact_media(media: dict, lang: str) -> dict:
         "idMal": media.get("idMal"),
         "title": pick_title(media.get("title"), lang),
         "titles": media.get("title") or {},
+        "description": media.get("description") or "",
         "episodes": media.get("episodes"),
         "format": media.get("format"),
         "status": media.get("status"),

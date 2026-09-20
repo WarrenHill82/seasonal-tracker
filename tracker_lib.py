@@ -640,16 +640,12 @@ def schedule_view_payload(range_key: str, offset: int = 0) -> dict:
     }
     history_weekdays: dict[int, int] = {}
     with sqlite3.connect(DB_PATH) as conn:
-        media_rows = conn.execute(
-            f"SELECT id, raw_json FROM media WHERE id IN ({', '.join('?' for _ in library)})",
+        history_rows = conn.execute(
+            f"SELECT anime_id, MAX(air_ts) FROM weekly_schedule WHERE source = 'anilist_history' AND anime_id IN ({', '.join('?' for _ in library)}) GROUP BY anime_id",
             tuple(sorted(library)),
         ).fetchall() if library else []
-    for media_id, raw_json in media_rows:
-        nodes = ((json.loads(raw_json).get("airingSchedule") or {}).get("nodes") or [])
-        airing_times = [parse_airing(node.get("airingAt")) for node in nodes]
-        airing_times = [when for when in airing_times if when is not None]
-        if airing_times:
-            history_weekdays[int(media_id)] = (max(airing_times).astimezone().weekday() + 1) % 7
+    for media_id, air_ts in history_rows:
+        history_weekdays[int(media_id)] = (datetime.fromtimestamp(int(air_ts), timezone.utc).astimezone().weekday() + 1) % 7
     start_ts = int(start.timestamp())
     end_ts = int(end.timestamp())
     ensure_database()
@@ -681,16 +677,6 @@ def schedule_view_payload(range_key: str, offset: int = 0) -> dict:
         value = progress.get(int(show["id"]), {}).get(kind)
         if value is None:
             value = show.get("dubAired" if kind == "dub" else "subAired")
-        if kind != "dub":
-            return value
-        event = next((item for item in show.get("nextEvents", []) if item.get("kind") == "dub"), None)
-        when = parse_airing(event.get("at")) if event else None
-        episode = int(event.get("episode") or 0) if event else 0
-        total = int(show.get("episodes") or 0)
-        while when is not None and episode > 0 and episode <= total and when.timestamp() < end_ts:
-            value = max(value or 0, episode)
-            when += timedelta(days=7)
-            episode += 1
         return value
 
     for anime_id, episode, air_date, air_ts, source in rows:

@@ -20,6 +20,9 @@
   width: 26px; height: 26px; padding: 0; border-radius: 7px;
   display: grid; place-items: center; font-size: 13px;
 }
+.picker-bar select { color: var(--text); min-width: 150px; }
+.picker-bar select option,
+.picker-bar select optgroup { background: var(--card); color: var(--text); }
 #btn-layout .i-bar { display: none; fill: currentColor; }
 #btn-layout .i-row { display: block; fill: currentColor; }
 #btn-layout.is-bar .i-row { display: none; }

@@ -1,10 +1,10 @@
 (function () {
   function airedNow(show, kind) {
     const total = show.episodes || 12;
+    const scheduleAired = Number(kind === 'dub' ? show.scheduleDubAired : show.scheduleSubAired);
+    if (Number.isFinite(scheduleAired)) return Math.min(Math.max(0, scheduleAired), total);
     let aired = Number(kind === 'dub' ? show.dubAired : show.subAired);
     if (!Number.isFinite(aired)) aired = 0;
-    const scheduleAired = Number(kind === 'dub' ? show.scheduleDubAired : show.scheduleSubAired);
-    if (Number.isFinite(scheduleAired)) aired = Math.max(aired, scheduleAired);
     let nextEp = null;
     let nextAt = null;
     if (kind === 'dub') {

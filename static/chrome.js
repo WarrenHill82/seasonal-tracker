@@ -157,7 +157,7 @@
       x.type = 'button';
       x.className = 'card-remove';
       x.textContent = '×';
-      x.title = 'Remove from tracker';
+      x.setAttribute('aria-label', 'Remove from tracker');
       x.addEventListener('click', function (ev) {
         ev.preventDefault();
         ev.stopPropagation();

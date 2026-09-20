@@ -45,7 +45,10 @@ html, body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  transition: opacity 180ms ease;
 }
+
+body.drawer-open #app { opacity: 0.42; }
 
 button, input, select {
   font: inherit;
@@ -319,6 +322,7 @@ button.active:hover { background: var(--text); }
   min-height: 0;
 }
 .drawer.hidden { display: none; }
+.drawer-picker { width: 75vw; max-width: 75vw; }
 .drawer-head { display: flex; justify-content: space-between; align-items: center; flex: 0 0 auto; }
 .drawer-head h2 { margin: 0; font-size: 16px; line-height: 1.35; }
 
@@ -340,7 +344,16 @@ button.active:hover { background: var(--text); }
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  padding: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) var(--bg-2);
 }
+.picker-grid::-webkit-scrollbar,
+.settings-form::-webkit-scrollbar { width: 10px; }
+.picker-grid::-webkit-scrollbar-track,
+.settings-form::-webkit-scrollbar-track { background: var(--bg-2); border-radius: 10px; }
+.picker-grid::-webkit-scrollbar-thumb,
+.settings-form::-webkit-scrollbar-thumb { background: var(--accent); border: 3px solid var(--bg-2); border-radius: 10px; }
 .picker-grid.tiles {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));

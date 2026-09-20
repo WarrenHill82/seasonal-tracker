@@ -125,7 +125,6 @@
     if (isSeriesUrl(url)) persist(show, url);
     const h = document.createElement('h4');
     h.textContent = show.title;
-    h.title = titleText(show);
     h.style.cursor = 'pointer';
     input.replaceWith(h);
     wireTitle(h, show);
@@ -183,7 +182,6 @@
       title.replaceWith(h);
       title = h;
     }
-    title.title = titleText(show);
     title.style.cursor = 'pointer';
     wireTitle(title, show);
     return card;

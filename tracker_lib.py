@@ -989,20 +989,20 @@ class DataHub:
         store_media_records(media_page, season, year)
         return raw
 
-    def search(self, q: str) -> dict:
-        query = """
-        query ($q: String) {
-          Page(page: 1, perPage: 20) {
-            media(search: $q, type: ANIME, sort: SEARCH_MATCH) {
-              id idMal title { romaji english native }
-              episodes format status season seasonYear genres averageScore isAdult siteUrl
-              coverImage { large medium color }
-              nextAiringEpisode { episode airingAt timeUntilAiring }
-            }
-          }
-        }
-        """
-        return self.anilist(query, {"q": q})
+        def search(self, q: str, season: str | None = None, year: int | None = None) -> dict:
+                query = """
+                query ($q: String, $season: MediaSeason, $seasonYear: Int) {
+                    Page(page: 1, perPage: 20) {
+                        media(search: $q, season: $season, seasonYear: $seasonYear, type: ANIME, sort: SEARCH_MATCH) {
+                            id idMal title { romaji english native }
+                            episodes format status season seasonYear genres averageScore isAdult siteUrl
+                            coverImage { large medium color }
+                            nextAiringEpisode { episode airingAt timeUntilAiring }
+                        }
+                    }
+                }
+                """
+                return self.anilist(query, {"q": q, "season": season, "seasonYear": year})
 
     def media_details(self, media_id: int) -> dict:
         key = f"media-{media_id}.json"

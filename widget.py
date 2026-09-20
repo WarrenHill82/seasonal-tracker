@@ -107,7 +107,9 @@ class Handler(SimpleHTTPRequestHandler):
                 if len(term) < 2:
                     self._send(200, {"media": []})
                     return
-                raw = HUB.search(term)
+                season = (q.get("season") or [None])[0]
+                year = int((q.get("year") or ["0"])[0]) or None
+                raw = HUB.search(term, season=season, year=year)
                 lang = load_settings().get("titleLanguage", "english")
                 media = [compact_media(m, lang) for m in (((raw.get("data") or {}).get("Page") or {}).get("media") or [])]
                 selected = {int(s["id"]) for s in load_library()}

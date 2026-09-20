@@ -175,7 +175,7 @@ function makePip(n, className, title, onClick) {
   el.type = "button";
   el.className = className;
   el.textContent = String(n);
-  el.title = title;
+  el.setAttribute("aria-label", title);
   el.addEventListener("click", (ev) => {
     ev.stopPropagation();
     onClick();
@@ -308,7 +308,7 @@ function renderRow(show) {
     <img class="poster" src="${show.cover || ""}" alt="" />
     <div class="row-body">
       <div class="title-line">
-        <h4 title="${show.title}">${show.title}</h4>
+        <h4>${show.title}</h4>
         <div class="progress-btns">
           <button type="button" data-act="remove">Remove</button>
         </div>
@@ -471,9 +471,9 @@ function fillSeasonSelect() {
   const year = state.meta.year;
   const opts = [];
   for (let y = year - 1; y <= year + 1; y += 1) {
-    seasons.forEach((s) => {
-      opts.push(`<option value="${s}-${y}">${s} ${y}</option>`);
-    });
+    opts.push(`<optgroup label="${y}">`);
+    seasons.forEach((s) => opts.push(`<option value="${s}-${y}">${s} ${y}</option>`));
+    opts.push("</optgroup>");
   }
   sel.innerHTML = opts.join("");
   sel.value = `${state.pickerSeason}-${state.pickerYear}`;
@@ -505,7 +505,7 @@ async function loadPicker(query) {
   try {
     let media;
     if (query) {
-      media = (await api(`/api/search?q=${encodeURIComponent(query)}`)).media;
+      media = (await api(`/api/search?q=${encodeURIComponent(query)}&season=${state.pickerSeason}&year=${state.pickerYear}`)).media;
       $("#page-info").textContent = `${media.length} results`;
     } else {
       const data = await api(`/api/season?season=${state.pickerSeason}&year=${state.pickerYear}&page=${state.pickerPage}`);
@@ -567,6 +567,11 @@ function fillSettingsForm() {
   setSelectValue(form.querySelector('[data-name="weekStart"]'), s.weekStart || "sunday");
 }
 
+function syncDrawerFade() {
+  const drawerOpen = !$("#drawer").classList.contains("hidden") || !$("#settings").classList.contains("hidden");
+  document.body.classList.toggle("drawer-open", drawerOpen);
+}
+
 function wire() {
   const notifyPanel = $("#notify-panel");
   const notifyClose = $("#notify-close");
@@ -591,15 +596,24 @@ function wire() {
     renderBoard();
   });
   $("#btn-add").addEventListener("click", () => {
+    $("#settings").classList.add("hidden");
     $("#drawer").classList.remove("hidden");
+    syncDrawerFade();
     loadPicker();
   });
-  $("#drawer-close").addEventListener("click", () => $("#drawer").classList.add("hidden"));
+  $("#drawer-close").addEventListener("click", () => {
+    $("#drawer").classList.add("hidden");
+    syncDrawerFade();
+  });
   $("#btn-settings").addEventListener("click", () => {
     fillSettingsForm();
     $("#settings").classList.remove("hidden");
+    syncDrawerFade();
   });
-  $("#settings-close").addEventListener("click", () => $("#settings").classList.add("hidden"));
+  $("#settings-close").addEventListener("click", () => {
+    $("#settings").classList.add("hidden");
+    syncDrawerFade();
+  });
   $("#settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const form = ev.target;
@@ -611,6 +625,7 @@ function wire() {
     state.settings = await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
     applyTheme();
     $("#settings").classList.add("hidden");
+    syncDrawerFade();
     toast("Settings saved");
     loadSchedule();
   });

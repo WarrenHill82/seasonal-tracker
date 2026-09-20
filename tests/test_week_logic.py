@@ -152,7 +152,7 @@ def test_populate_weekly_schedule_filters_to_saved_library(monkeypatch, tmp_path
     assert rows == [(42,)]
 
 
-def test_populate_weekly_schedule_creates_placeholder_for_missing_source_row(monkeypatch, tmp_path) -> None:
+def test_populate_weekly_schedule_omits_missing_source_row(monkeypatch, tmp_path) -> None:
     import sqlite3
 
     import tracker_lib
@@ -176,11 +176,11 @@ def test_populate_weekly_schedule_creates_placeholder_for_missing_source_row(mon
     )
 
     inserted = tracker_lib.populate_weekly_schedule(2025, 9, source="sub")
-    assert inserted == 2
+    assert inserted == 1
 
     with sqlite3.connect(tracker_lib.DB_PATH) as conn:
         rows = conn.execute(
             "SELECT anime_id, anime_title, source, air_date FROM weekly_schedule ORDER BY anime_id"
         ).fetchall()
     assert (42, "Saved Show", "sub", "2025-09-13") in rows
-    assert (99, "Missing Show", "missing", "2025-09-13") in rows
+    assert all(row[0] != 99 for row in rows)

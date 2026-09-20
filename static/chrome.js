@@ -15,6 +15,7 @@
       '.stack-card.compact h4{display:-webkit-box!important;-webkit-line-clamp:2!important;-webkit-box-orient:vertical!important;overflow:hidden!important;height:2.6em!important;line-height:1.3!important;word-break:break-word!important;cursor:pointer!important;color:var(--text,#e8eef6)!important;}',
       '.stack-card.compact h4:hover{color:#7eb8ff!important;text-decoration:underline!important;}',
       '.card-remove{position:absolute!important;top:6px!important;right:6px!important;width:22px!important;height:22px!important;border:0!important;border-radius:11px!important;background:#000a!important;color:#fff!important;cursor:pointer!important;line-height:22px!important;padding:0!important;font-size:14px!important;}',
+      '.stack-card.airing,.row-card.airing{border:2px solid #ef5350!important;}',
       '.stack-card.finished,.row-card.finished{border:2px solid #3dd68c!important;}',
       '.stack-card.sub-done,.row-card.sub-done{border:2px solid #ff8a5b!important;}',
       '.remain-tiles{display:flex!important;flex-direction:row!important;flex-wrap:nowrap!important;justify-content:center!important;gap:6px!important;}',

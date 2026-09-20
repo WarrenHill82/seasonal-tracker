@@ -382,7 +382,8 @@ def populate_weekly_schedule(
     for item in raw_records:
         if not isinstance(item, dict):
             continue
-        anime_id_raw = item.get("id")
+        nested_media = ((item.get("media") or {}).get("media")) or {}
+        anime_id_raw = item.get("id") or nested_media.get("id")
         if anime_id_raw is None:
             continue
         try:
@@ -398,15 +399,22 @@ def populate_weekly_schedule(
         for item in records:
             if not isinstance(item, dict):
                 continue
-            anime_id_raw = item.get("id")
+            nested_media = ((item.get("media") or {}).get("media")) or {}
+            anime_id_raw = item.get("id") or nested_media.get("id")
             if anime_id_raw is None:
                 continue
             try:
                 anime_id = int(anime_id_raw)
             except (TypeError, ValueError):
                 continue
-            title = pick_title(item.get("title"), "english") or pick_title(item.get("title"), "romaji") or "Unknown"
+            title_data = item.get("title") if isinstance(item.get("title"), dict) else {
+                "english": item.get("english"),
+                "romaji": item.get("romaji"),
+            }
+            title = pick_title(title_data, "english") or pick_title(title_data, "romaji") or "Unknown"
             nodes = ((item.get("airingSchedule") or {}).get("nodes") or [])
+            if not nodes and item.get("episodeDate"):
+                nodes = [{"episode": item.get("episodeNumber"), "airingAt": item.get("episodeDate")}]
             for node in nodes:
                 if not isinstance(node, dict):
                     continue
@@ -625,6 +633,23 @@ def schedule_view_payload(range_key: str, offset: int = 0) -> dict:
         current += timedelta(days=1)
 
     library = {int(show["id"]): show for show in load_library() if show.get("id") is not None}
+    sub_map, dub_map, dub_feed = build_maps()
+    enriched_library = {
+        show_id: enrich_show(dict(show), sub_map, dub_map, dub_feed)
+        for show_id, show in library.items()
+    }
+    history_weekdays: dict[int, int] = {}
+    with sqlite3.connect(DB_PATH) as conn:
+        media_rows = conn.execute(
+            f"SELECT id, raw_json FROM media WHERE id IN ({', '.join('?' for _ in library)})",
+            tuple(sorted(library)),
+        ).fetchall() if library else []
+    for media_id, raw_json in media_rows:
+        nodes = ((json.loads(raw_json).get("airingSchedule") or {}).get("nodes") or [])
+        airing_times = [parse_airing(node.get("airingAt")) for node in nodes]
+        airing_times = [when for when in airing_times if when is not None]
+        if airing_times:
+            history_weekdays[int(media_id)] = (max(airing_times).astimezone().weekday() + 1) % 7
     start_ts = int(start.timestamp())
     end_ts = int(end.timestamp())
     ensure_database()
@@ -638,21 +663,85 @@ def schedule_view_payload(range_key: str, offset: int = 0) -> dict:
             """,
             (start_ts, end_ts),
         ).fetchall()
+        progress_rows = conn.execute(
+            """
+            SELECT anime_id, source, MAX(episode)
+            FROM weekly_schedule
+            WHERE air_ts < ?
+            GROUP BY anime_id, source
+            """,
+            (end_ts,),
+        ).fetchall()
+
+    progress: dict[int, dict[str, int]] = {}
+    for anime_id, source, episode in progress_rows:
+        progress.setdefault(int(anime_id), {})["dub" if source == "dub" else "sub"] = int(episode or 0)
+
+    def progress_for(show: dict, kind: str) -> int | None:
+        value = progress.get(int(show["id"]), {}).get(kind)
+        if value is None:
+            value = show.get("dubAired" if kind == "dub" else "subAired")
+        if kind != "dub":
+            return value
+        event = next((item for item in show.get("nextEvents", []) if item.get("kind") == "dub"), None)
+        when = parse_airing(event.get("at")) if event else None
+        episode = int(event.get("episode") or 0) if event else 0
+        total = int(show.get("episodes") or 0)
+        while when is not None and episode > 0 and episode <= total and when.timestamp() < end_ts:
+            value = max(value or 0, episode)
+            when += timedelta(days=7)
+            episode += 1
+        return value
 
     for anime_id, episode, air_date, air_ts, source in rows:
-        show = library.get(int(anime_id))
+        show = enriched_library.get(int(anime_id))
         if show is None or air_date not in days:
             continue
-        item = enrich_show(dict(show), {}, {}, {})
+        item = dict(show)
+        item.update({
+            "scheduleSubAired": progress_for(show, "sub"),
+            "scheduleDubAired": progress_for(show, "dub"),
+        })
         focus = {
             "kind": "sub" if source == "anilist_history" else source,
             "episode": episode,
             "at": datetime.fromtimestamp(air_ts, timezone.utc).isoformat(),
             "ts": air_ts,
         }
-        item["focus"] = focus
-        item["focusAll"] = [focus]
-        days[air_date].append(item)
+        bucket = days[air_date]
+        existing = next((entry for entry in bucket if int(entry.get("id")) == int(anime_id)), None)
+        if existing is None:
+            item["focus"] = focus
+            item["focusAll"] = [focus]
+            bucket.append(item)
+        else:
+            existing["focusAll"].append(focus)
+            existing["focusAll"].sort(key=lambda event: event["ts"])
+            existing["focus"] = existing["focusAll"][0]
+
+    displayed_ids = {
+        int(show["id"])
+        for day in days.values()
+        for show in day
+        if show.get("id") is not None
+    }
+    for show_id, show in enriched_library.items():
+        if show_id in displayed_ids:
+            continue
+        air_dow = show.get("airDow")
+        if air_dow is None:
+            air_dow = history_weekdays.get(show_id)
+        if air_dow is None:
+            continue
+        for day_key, items in days.items():
+            day = datetime.fromisoformat(day_key).date()
+            if day.weekday() == (int(air_dow) - 1) % 7:
+                display_show = dict(show)
+                display_show.update({
+                    "scheduleSubAired": progress_for(show, "sub"),
+                    "scheduleDubAired": progress_for(show, "dub"),
+                })
+                items.append(display_show)
 
     ordered = [
         {

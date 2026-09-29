@@ -62,13 +62,19 @@ def test_zoom_settings_default_and_persist(monkeypatch, tmp_path) -> None:
 
     zoom_keys = ("mainZoom", "pickerZoom", "settingsZoom", "notificationsZoom", "detailsZoom")
     defaults = tracker_lib.load_settings()
-    assert all(defaults[key] == 100 for key in zoom_keys)
+    assert all(defaults[key] == 75 for key in zoom_keys)
+    assert defaults["cardSort"] == "name"
+    assert defaults["detailsPanelX"] == 0.5
+    assert defaults["detailsPanelY"] == 0.5
 
-    tracker_lib.save_json(tracker_lib.SETTINGS_PATH, {"mainZoom": 125, "detailsZoom": 85})
+    tracker_lib.save_json(tracker_lib.SETTINGS_PATH, {"mainZoom": 50, "detailsZoom": 100, "cardSort": "air", "detailsPanelX": 0.2, "detailsPanelY": 0.8})
     persisted = tracker_lib.load_settings()
-    assert persisted["mainZoom"] == 125
-    assert persisted["detailsZoom"] == 85
-    assert persisted["pickerZoom"] == 100
+    assert persisted["mainZoom"] == 50
+    assert persisted["detailsZoom"] == 100
+    assert persisted["pickerZoom"] == 75
+    assert persisted["cardSort"] == "air"
+    assert persisted["detailsPanelX"] == 0.2
+    assert persisted["detailsPanelY"] == 0.8
 
 
 def test_populate_weekly_schedule_skips_rows_missing_anime_id(monkeypatch, tmp_path) -> None:

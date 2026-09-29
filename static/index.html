@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Anime Seasonal Tracker</title>
-  <link rel="stylesheet" href="/style.css?v=zoom1" />
-  <link rel="stylesheet" href="/compact.css?v=zoom1" />
+  <link rel="stylesheet" href="/style.css?v=details4" />
+  <link rel="stylesheet" href="/compact.css?v=details4" />
 </head>
 <body>
   <div id="app">
@@ -18,7 +18,11 @@
         <button type="button" data-range="week_after">Following</button>
         <button type="button" data-range="library">My shows</button>
       </nav>
-      <label class="zoom-control main-zoom" for="main-zoom-slider">Zoom <input id="main-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="main-zoom-value">100%</output></label>
+      <div class="zoom-control main-zoom" id="main-zoom" role="group" aria-label="Card size">
+        <button type="button" data-zoom="50" aria-label="50 percent card size" title="50%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="6" height="6" rx="1" /></svg></button>
+        <button type="button" data-zoom="75" aria-label="75 percent card size" title="75%" aria-pressed="true"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" /></svg></button>
+        <button type="button" data-zoom="100" aria-label="100 percent card size" title="100%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1" /></svg></button>
+      </div>
       <div class="tools">
         <button type="button" id="btn-compact" hidden></button>
         <button type="button" id="btn-layout" class="icon-btn" aria-label="Bar / Row">
@@ -44,7 +48,11 @@
       <div id="picker-grid" class="picker-grid tiles"></div>
       <div class="pager"><button type="button" id="page-prev">Prev</button><span id="page-info"></span><button type="button" id="page-next">Next</button></div>
     </div>
-    <label class="zoom-control panel-zoom" for="picker-zoom-slider">Zoom <input id="picker-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="picker-zoom-value">100%</output></label>
+    <div class="zoom-control panel-zoom" id="picker-zoom" role="group" aria-label="Add shows content size">
+      <button type="button" data-zoom="50" aria-label="50 percent content size" title="50%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="6" height="6" rx="1" /></svg></button>
+      <button type="button" data-zoom="75" aria-label="75 percent content size" title="75%" aria-pressed="true"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" /></svg></button>
+      <button type="button" data-zoom="100" aria-label="100 percent content size" title="100%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1" /></svg></button>
+    </div>
   </aside>
   <aside id="settings" class="drawer drawer-settings hidden">
     <div class="drawer-head"><h2>Widget settings</h2><button type="button" id="settings-close">Close</button></div>
@@ -56,7 +64,11 @@
       <button type="submit" class="primary">Save</button>
       <div class="reload-row"><button type="button" id="btn-reload-ui">Reload UI</button><button type="button" id="btn-reload-widget" class="primary">Reload widget</button></div>
     </form>
-    <label class="zoom-control panel-zoom" for="settings-zoom-slider">Zoom <input id="settings-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="settings-zoom-value">100%</output></label>
+    <div class="zoom-control panel-zoom" id="settings-zoom" role="group" aria-label="Settings content size">
+      <button type="button" data-zoom="50" aria-label="50 percent content size" title="50%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="6" height="6" rx="1" /></svg></button>
+      <button type="button" data-zoom="75" aria-label="75 percent content size" title="75%" aria-pressed="true"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" /></svg></button>
+      <button type="button" data-zoom="100" aria-label="100 percent content size" title="100%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1" /></svg></button>
+    </div>
   </aside>
   <aside id="notify-panel" class="notify-panel hidden" aria-live="polite">
     <div class="notify-head">
@@ -64,22 +76,30 @@
       <button type="button" id="notify-close">Close</button>
     </div>
     <div id="notify-list" class="notify-list"></div>
-    <label class="zoom-control panel-zoom" for="notify-zoom-slider">Zoom <input id="notify-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="notify-zoom-value">100%</output></label>
+    <div class="zoom-control panel-zoom" id="notify-zoom" role="group" aria-label="Notification content size">
+      <button type="button" data-zoom="50" aria-label="50 percent content size" title="50%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="6" height="6" rx="1" /></svg></button>
+      <button type="button" data-zoom="75" aria-label="75 percent content size" title="75%" aria-pressed="true"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" /></svg></button>
+      <button type="button" data-zoom="100" aria-label="100 percent content size" title="100%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1" /></svg></button>
+    </div>
   </aside>
   <aside id="show-details" class="drawer show-details hidden">
     <div class="drawer-head"><h2>Show details</h2><button type="button" id="show-details-close">Close</button></div>
     <div id="show-details-content" class="show-details-content"></div>
-    <label class="zoom-control panel-zoom" for="details-zoom-slider">Zoom <input id="details-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="details-zoom-value">100%</output></label>
+    <div class="zoom-control panel-zoom" id="details-zoom" role="group" aria-label="Details content size">
+      <button type="button" data-zoom="50" aria-label="50 percent content size" title="50%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="6" height="6" rx="1" /></svg></button>
+      <button type="button" data-zoom="75" aria-label="75 percent content size" title="75%" aria-pressed="true"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" /></svg></button>
+      <button type="button" data-zoom="100" aria-label="100 percent content size" title="100%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1" /></svg></button>
+    </div>
   </aside>
   <div hidden><span id="range-label"></span><span id="season-chip"></span></div>
   <div id="toast" class="toast hidden"></div>
   <div id="hover-tip" class="hover-tip hidden"></div>
-  <script src="/app.js?v=zoom1"></script>
-  <script src="/chrome.js?v=zoom1"></script>
-  <script src="/pills.js?v=zoom1"></script>
-  <script src="/count-fix.js?v=zoom1"></script>
-  <script src="/weeks.js?v=zoom1"></script>
-  <script src="/sort.js?v=zoom1"></script>
-  <script src="/week-fix.js?v=zoom1"></script>
+  <script src="/app.js?v=details4"></script>
+  <script src="/chrome.js?v=details4"></script>
+  <script src="/pills.js?v=details4"></script>
+  <script src="/count-fix.js?v=details4"></script>
+  <script src="/weeks.js?v=details4"></script>
+  <script src="/sort.js?v=details4"></script>
+  <script src="/week-fix.js?v=details4"></script>
 </body>
 </html>

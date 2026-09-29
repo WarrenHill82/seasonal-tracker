@@ -43,11 +43,14 @@ DEFAULT_SETTINGS = {
     "weekStart": "sunday",
     "opacity": 0.97,
     "titleLanguage": "english",
-    "mainZoom": 100,
-    "pickerZoom": 100,
-    "settingsZoom": 100,
-    "notificationsZoom": 100,
-    "detailsZoom": 100,
+    "mainZoom": 75,
+    "pickerZoom": 75,
+    "settingsZoom": 75,
+    "notificationsZoom": 75,
+    "detailsZoom": 75,
+    "cardSort": "name",
+    "detailsPanelX": 0.5,
+    "detailsPanelY": 0.5,
 }
 
 

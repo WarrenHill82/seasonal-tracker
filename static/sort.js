@@ -5,7 +5,7 @@
     { id: 'air', label: 'Air date' }
   ];
 
-  let mode = localStorage.getItem(KEY) || 'name';
+  let mode = state.settings.cardSort || localStorage.getItem(KEY) || 'name';
   if (!OPTIONS.some(function (o) { return o.id === mode; })) mode = 'name';
 
   const css = document.createElement('style');
@@ -37,6 +37,12 @@
     item.addEventListener('click', function () {
       mode = opt.id;
       localStorage.setItem(KEY, mode);
+      state.settings.cardSort = mode;
+      if (typeof api === 'function') {
+        api('/api/settings', { method: 'POST', body: JSON.stringify({ cardSort: mode }) })
+          .then(function (settings) { state.settings = Object.assign({}, settings, state.settings); })
+          .catch(function () {});
+      }
       btn.textContent = 'Sort: ' + opt.label;
       menu.querySelectorAll('li').forEach(function (node) {
         node.classList.toggle('active', node.dataset.value === mode);
@@ -99,11 +105,24 @@
     });
   }
 
+  function syncModeFromSettings() {
+    const saved = state.settings.cardSort;
+    if (!OPTIONS.some(function (option) { return option.id === saved; })) return;
+    mode = saved;
+    btn.textContent = 'Sort: ' + (OPTIONS.find(function (option) { return option.id === mode; }) || OPTIONS[0]).label;
+    menu.querySelectorAll('li').forEach(function (node) {
+      node.classList.toggle('active', node.dataset.value === mode);
+    });
+    sortLanes();
+  }
+
   const orig = window.renderBoard;
   window.renderBoard = function () {
     if (typeof orig === 'function') orig();
     sortLanes();
   };
 
+  if (window.trackerSettingsReady) syncModeFromSettings();
+  else window.addEventListener('tracker-settings-ready', syncModeFromSettings, { once: true });
   sortLanes();
 })();

@@ -14,6 +14,7 @@ const state = {
 
 const $ = (sel) => document.querySelector(sel);
 const board = $("#board");
+window.trackerSettingsReady = false;
 
 const DAY_ACCENTS = ["#7ad0ff", "#8b7bff", "#3dd68c", "#f0c36a", "#ff8a5b", "#ff9aa2", "#5b8def"];
 
@@ -106,6 +107,14 @@ async function api(path, opts = {}) {
   }
 }
 
+async function openExternalLink(url) {
+  try {
+    await api("/api/open", { method: "POST", body: JSON.stringify({ url }) });
+  } catch (_) {
+    // The shared API handler reports failures in Notifications.
+  }
+}
+
 window.api = api;
 window.reportError = reportError;
 window.notify = notify;
@@ -190,42 +199,48 @@ function wireCardTitle(title, show) {
   title.addEventListener("mouseleave", hideHoverTip);
 }
 
-function setupZoomControl(sliderId, valueId, target, settingKey) {
-  const slider = $(`#${sliderId}`);
-  const value = $(`#${valueId}`);
-  if (!slider || !target) return;
+function setupZoomControl(groupId, target, settingKey, onChange) {
+  const group = $(`#${groupId}`);
+  if (!group) return;
+  const presets = [...group.querySelectorAll("[data-zoom]")];
+  const validLevels = presets.map((button) => Number(button.dataset.zoom));
   const stored = Number(state.settings[settingKey]);
-  if (Number.isFinite(stored)) {
-    slider.value = String(Math.max(Number(slider.min), Math.min(Number(slider.max), stored)));
-  }
-  const apply = () => {
-    const percent = Number(slider.value);
-    target.style.zoom = `${percent / 100}`;
-    if (value) value.value = `${percent}%`;
-  };
-  slider.addEventListener("input", apply);
-  slider.addEventListener("change", async () => {
-    const percent = Number(slider.value);
+  const initial = Number.isFinite(stored)
+    ? validLevels.reduce((nearest, level) => Math.abs(level - stored) < Math.abs(nearest - stored) ? level : nearest, validLevels[0])
+    : 75;
+  const apply = (percent) => {
     state.settings[settingKey] = percent;
-    try {
-      const settings = await api("/api/settings", {
-        method: "POST",
-        body: JSON.stringify({ [settingKey]: percent }),
-      });
-      state.settings = { ...state.settings, ...settings };
-    } catch (_) {
-      // The shared API handler reports persistence failures in Notifications.
-    }
+    if (target) target.style.zoom = `${percent / 100}`;
+    presets.forEach((button) => {
+      button.setAttribute("aria-pressed", String(Number(button.dataset.zoom) === percent));
+    });
+    if (onChange) onChange();
+  };
+  presets.forEach((button) => {
+    button.addEventListener("click", async () => {
+      const percent = Number(button.dataset.zoom);
+      if (!validLevels.includes(percent)) return;
+      apply(percent);
+      try {
+        const settings = await api("/api/settings", {
+          method: "POST",
+          body: JSON.stringify({ [settingKey]: percent }),
+        });
+        state.settings = { ...settings, ...state.settings };
+      } catch (_) {
+        // The shared API handler reports persistence failures in Notifications.
+      }
+    });
   });
-  apply();
+  apply(initial);
 }
 
 function setupZoomControls() {
-  setupZoomControl("main-zoom-slider", "main-zoom-value", $("#board"), "mainZoom");
-  setupZoomControl("picker-zoom-slider", "picker-zoom-value", $("#drawer .panel-content"), "pickerZoom");
-  setupZoomControl("settings-zoom-slider", "settings-zoom-value", $("#settings-form"), "settingsZoom");
-  setupZoomControl("notify-zoom-slider", "notify-zoom-value", $("#notify-list"), "notificationsZoom");
-  setupZoomControl("details-zoom-slider", "details-zoom-value", $("#show-details-content"), "detailsZoom");
+  setupZoomControl("main-zoom", null, "mainZoom", renderBoard);
+  setupZoomControl("picker-zoom", $("#picker-grid"), "pickerZoom");
+  setupZoomControl("settings-zoom", $("#settings-form"), "settingsZoom");
+  setupZoomControl("notify-zoom", $("#notify-list"), "notificationsZoom");
+  setupZoomControl("details-zoom", $("#show-details-content"), "detailsZoom");
 }
 
 function countdown(iso) {
@@ -498,6 +513,7 @@ function renderDaySection(label, shows, { column, accent } = {}) {
   wrap.innerHTML = `<h3>${label}</h3>`;
   const cards = document.createElement("div");
   cards.className = cardsClass();
+  cards.style.zoom = `${Number(state.settings.mainZoom ?? 75) / 100}`;
   shows.forEach((s) => {
     const card = paintCard(s);
     card.addEventListener("click", (event) => openShowDetails(s.id, event));
@@ -507,16 +523,67 @@ function renderDaySection(label, shows, { column, accent } = {}) {
   return wrap;
 }
 
-async function openShowDetails(showId, event) {
+function appendFormattedDescription(parent, sourceNode) {
+  if (sourceNode.nodeType === Node.TEXT_NODE) {
+    parent.appendChild(document.createTextNode(sourceNode.nodeValue || ""));
+    return;
+  }
+  if (sourceNode.nodeType !== Node.ELEMENT_NODE) return;
+
+  const tag = sourceNode.tagName.toLowerCase();
+  if (tag === "a") {
+    let href = "";
+    try {
+      const url = new URL(sourceNode.getAttribute("href") || "", location.origin);
+      if (url.protocol === "http:" || url.protocol === "https:") href = url.href;
+    } catch (_) {
+      href = "";
+    }
+    if (href) {
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      anchor.addEventListener("click", (event) => {
+        event.preventDefault();
+        openExternalLink(href);
+      });
+      parent.appendChild(anchor);
+      for (const child of sourceNode.childNodes) appendFormattedDescription(anchor, child);
+      return;
+    }
+  }
+
+  const allowedTags = new Set(["p", "br", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "h3", "h4", "hr", "code", "pre", "sup", "sub"]);
+  const target = allowedTags.has(tag) ? document.createElement(tag) : parent;
+  if (target !== parent) parent.appendChild(target);
+  for (const child of sourceNode.childNodes) appendFormattedDescription(target, child);
+}
+
+function renderFormattedDescription(container, markup) {
+  if (!markup) {
+    container.textContent = "No description available.";
+    return;
+  }
+  const parsed = new DOMParser().parseFromString(markup, "text/html");
+  for (const child of parsed.body.childNodes) appendFormattedDescription(container, child);
+}
+
+async function openShowDetails(showId) {
   const panel = $("#show-details");
   const content = $("#show-details-content");
   if (!panel || !content) return;
   panel.classList.remove("hidden");
-  const x = event?.clientX || innerWidth / 2;
-  const y = event?.clientY || innerHeight / 2;
-  const panelWidth = Math.min(520, innerWidth * 0.92);
-  panel.style.left = `${Math.max(8, Math.min(x, innerWidth - panelWidth - 8))}px`;
-  panel.style.top = `${Math.max(8, Math.min(y, innerHeight - 220))}px`;
+  const width = panel.offsetWidth;
+  const height = panel.offsetHeight;
+  const maxLeft = Math.max(8, innerWidth - width - 8);
+  const maxTop = Math.max(8, innerHeight - height - 8);
+  const xRatio = Number.isFinite(Number(state.settings.detailsPanelX)) ? Math.max(0, Math.min(1, Number(state.settings.detailsPanelX))) : 0.5;
+  const yRatio = Number.isFinite(Number(state.settings.detailsPanelY)) ? Math.max(0, Math.min(1, Number(state.settings.detailsPanelY))) : 0.5;
+  panel.style.right = "auto";
+  panel.style.bottom = "auto";
+  panel.style.left = `${8 + (maxLeft - 8) * xRatio}px`;
+  panel.style.top = `${8 + (maxTop - 8) * yRatio}px`;
   content.textContent = "Loading show details…";
   try {
     const show = await api(`/api/show/${showId}`);
@@ -529,15 +596,18 @@ async function openShowDetails(showId, event) {
       { name: "AniList", url: show.sourceUrl || show.siteUrl || `https://anilist.co/anime/${show.id}` },
       { name: "AniSchedule", url: anischedule },
       { name: "MyAnimeList", url: show.idMal ? `https://myanimelist.net/anime/${show.idMal}` : `https://myanimelist.net/anime.php?q=${encodeURIComponent(show.title || "")}` },
-      { name: "HiAnime", url: `https://hianime.to/search?keyword=${encodeURIComponent(show.title || "")}` },
+      { name: "IMDb", url: `https://www.imdb.com/find/?q=${encodeURIComponent(show.title || "")}` },
     ];
     for (const link of sourceLinks) {
       if (!link.url) continue;
       const source = document.createElement("a");
       source.href = link.url;
-      source.target = "_blank";
-      source.rel = "noopener noreferrer";
+      source.setAttribute("role", "button");
       source.textContent = link.name;
+      source.addEventListener("click", (clickEvent) => {
+        clickEvent.preventDefault();
+        openExternalLink(link.url);
+      });
       sources.appendChild(source);
     }
     const heading = document.createElement("div");
@@ -550,20 +620,37 @@ async function openShowDetails(showId, event) {
     nexusButton.addEventListener("click", async () => {
       const override = nexusInput.value.trim();
       const url = override || `https://anime.nexus/series?search=${encodeURIComponent(show.title || "")}`;
-      try {
-        await api("/api/open", { method: "POST", body: JSON.stringify({ url }) });
-      } catch (_) {
-        // The shared API handler reports the failure in Notifications.
-      }
+      openExternalLink(url);
     });
     const nexusInput = document.createElement("input");
     nexusInput.className = "nexus-url-input";
     nexusInput.type = "url";
     nexusInput.placeholder = "Optional Anime Nexus link";
+    nexusInput.value = show.nexusUrl || "";
     nexusInput.setAttribute("aria-label", "Optional Anime Nexus link");
-    const description = document.createElement("p");
+    nexusInput.addEventListener("blur", async () => {
+      const nexusUrl = nexusInput.value.trim();
+      if (nexusUrl === (show.nexusUrl || "")) return;
+      try {
+        await api("/api/library/progress", {
+          method: "POST",
+          body: JSON.stringify({ id: show.id, nexusUrl }),
+        });
+        show.nexusUrl = nexusUrl;
+        const savedShow = state.library.find((item) => Number(item.id) === Number(show.id));
+        if (savedShow) savedShow.nexusUrl = nexusUrl;
+      } catch (_) {
+        // The shared API handler reports failures in Notifications.
+      }
+    });
+    const descriptionArea = document.createElement("section");
+    descriptionArea.className = "show-description-area";
+    const descriptionTitle = document.createElement("h3");
+    descriptionTitle.textContent = "Synopsis";
+    const description = document.createElement("div");
     description.className = "show-description";
-    description.textContent = show.description || "No description available.";
+    renderFormattedDescription(description, show.description);
+    descriptionArea.append(descriptionTitle, description);
     const list = document.createElement("div");
     list.className = "episode-list";
     for (const episode of show.episodesSchedule || []) {
@@ -572,7 +659,10 @@ async function openShowDetails(showId, event) {
       row.innerHTML = `<b>Episode ${episode.episode}</b><span>${episode.source.toUpperCase()}</span><time>${episode.airDate}</time>`;
       list.appendChild(row);
     }
-    content.replaceChildren(heading, sources, nexusButton, nexusInput, description, list);
+    const scheduleTitle = document.createElement("h3");
+    scheduleTitle.className = "episode-list-title";
+    scheduleTitle.textContent = "Episode schedule";
+    content.replaceChildren(heading, sources, nexusButton, nexusInput, descriptionArea, scheduleTitle, list);
   } catch (error) {
     if (!error.__reported) reportError(error, "Could not load show details");
     content.textContent = `Could not load show details: ${error.message}`;
@@ -863,7 +953,51 @@ function syncDrawerFade() {
   document.body.classList.toggle("drawer-open", drawerOpen);
 }
 
+function enablePanelDragging(panel, handle) {
+  if (!panel || !handle) return;
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest("button")) return;
+    const rect = panel.getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let moved = false;
+    const onMove = (moveEvent) => {
+      if (moveEvent.pointerId !== event.pointerId) return;
+      moved = true;
+      const maxLeft = Math.max(8, innerWidth - rect.width - 8);
+      const maxTop = Math.max(8, innerHeight - rect.height - 8);
+      panel.style.right = "auto";
+      panel.style.bottom = "auto";
+      panel.style.left = `${Math.max(8, Math.min(maxLeft, rect.left + moveEvent.clientX - startX))}px`;
+      panel.style.top = `${Math.max(8, Math.min(maxTop, rect.top + moveEvent.clientY - startY))}px`;
+    };
+    const stop = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", stop);
+      document.removeEventListener("pointercancel", stop);
+      if (!moved) return;
+      const rect = panel.getBoundingClientRect();
+      const maxLeft = Math.max(8, innerWidth - rect.width - 8);
+      const maxTop = Math.max(8, innerHeight - rect.height - 8);
+      const position = {
+        detailsPanelX: maxLeft === 8 ? 0 : (rect.left - 8) / (maxLeft - 8),
+        detailsPanelY: maxTop === 8 ? 0 : (rect.top - 8) / (maxTop - 8),
+      };
+      state.settings = { ...state.settings, ...position };
+      api("/api/settings", { method: "POST", body: JSON.stringify(position) })
+        .then((settings) => { state.settings = { ...settings, ...state.settings }; })
+        .catch(() => {});
+    };
+    event.preventDefault();
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", stop);
+    document.addEventListener("pointercancel", stop);
+  });
+}
+
 function wire() {
+  const showDetails = $("#show-details");
+  enablePanelDragging(showDetails, showDetails?.querySelector(".drawer-head"));
   const notifyPanel = $("#notify-panel");
   const notifyClose = $("#notify-close");
   const notifyButton = $("#btn-notifications");
@@ -967,6 +1101,8 @@ async function boot() {
   wire();
   state.meta = await api("/api/meta");
   state.settings = state.meta.settings || {};
+  window.trackerSettingsReady = true;
+  window.dispatchEvent(new Event("tracker-settings-ready"));
   setupZoomControls();
   state.pickerSeason = state.meta.season;
   state.pickerYear = state.meta.year;

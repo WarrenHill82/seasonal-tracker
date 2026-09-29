@@ -12,10 +12,10 @@
 .remain-tile.dub { background: color-mix(in srgb, #3dd68c 22%, var(--card-2, #1c2430)); color: #3dd68c; }
 .remain-tile.done { background: color-mix(in srgb, #3dd68c 22%, var(--card-2, #1c2430)); color: #3dd68c; }
 
-.statusbar { position: relative; display: flex; flex-wrap: nowrap; align-items: center; height: 32px; max-height: 32px; }
-.statusbar .ranges { display: flex; align-items: center; gap: 4px; margin-right: auto; }
+.statusbar { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; height: 32px; max-height: 32px; }
+.statusbar .ranges { display: flex; align-items: center; gap: 4px; min-width: 0; margin-right: 0; }
 .statusbar .ranges button { padding: 2px 8px; font-size: 11px; }
-.statusbar .tools { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; margin-left: auto; }
+.statusbar .tools { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; justify-self: end; margin-left: 0; }
 .statusbar .icon-btn {
   width: 26px; height: 26px; padding: 0; border-radius: 7px;
   display: grid; place-items: center; font-size: 13px;

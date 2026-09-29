@@ -48,6 +48,11 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC), **kwargs)
 
+    def end_headers(self) -> None:
+        if not self.path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        super().end_headers()
+
     def log_message(self, fmt: str, *args: Any) -> None:
         message = fmt % args
         sys.stderr.write("[tracker] " + message + "\n")

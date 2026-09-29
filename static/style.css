@@ -351,11 +351,14 @@ button.active:hover { background: var(--text); }
 .show-details-content::-webkit-scrollbar { width: 10px; }
 .show-details-content::-webkit-scrollbar-track { background: var(--bg-2); border-radius: 10px; }
 .show-details-content::-webkit-scrollbar-thumb { background: var(--accent); border: 3px solid var(--bg-2); border-radius: 10px; }
-.show-details-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.show-details-heading { display: flex; align-items: center; gap: 12px; }
 .show-details-heading h2 { margin: 0; font-size: 18px; }
-.show-sources { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.show-details-heading a { white-space: nowrap; font-size: 11px; color: var(--text); text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
-.show-details-heading a:hover { color: var(--accent); }
+.show-sources { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 8px 0 12px; }
+.show-sources a { min-width: 0; overflow: hidden; padding: 6px 4px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); font-size: 10px; text-align: center; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.show-sources a:hover { border-color: var(--accent); color: var(--accent); }
+.nexus-open-button { width: 100%; min-height: 32px; padding: 6px 10px; border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 7px; background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--text); font-size: 11px; font-weight: 650; }
+.nexus-open-button:hover { background: color-mix(in srgb, var(--accent) 25%, var(--card)); }
+.nexus-url-input { width: 100%; min-width: 0; margin-top: 6px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--text); font-size: 11px; }
 .show-description { color: var(--muted); line-height: 1.5; white-space: pre-line; }
 .episode-list { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
 .episode-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 8px 10px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
@@ -370,7 +373,8 @@ button.active:hover { background: var(--text); }
 .zoom-control { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 0 0 auto; color: var(--muted); font-size: 11px; padding: 8px 0 0; }
 .zoom-control input { width: min(180px, 38vw); accent-color: var(--accent); }
 .zoom-control output { min-width: 36px; color: var(--text); }
-.main-zoom { position: absolute; left: 50%; transform: translateX(-50%); bottom: 6px; padding: 0; z-index: 2; }
+.main-zoom { position: static; transform: none; padding: 0; white-space: nowrap; font-size: 9px; }
+.main-zoom input { width: 82px; }
 .panel-zoom { border-top: 1px solid var(--line); margin-top: 8px; }
 
 .picker-bar {

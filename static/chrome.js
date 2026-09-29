@@ -26,8 +26,8 @@
       '.remain-tile.done{background:color-mix(in srgb,#3dd68c 22%,var(--card-2,#1c2430))!important;color:#3dd68c!important;}',
       '.hover-tip{position:fixed!important;z-index:90!important;max-width:min(360px,80vw)!important;background:var(--bg-2,#151b24)!important;color:var(--text,#e8eef6)!important;border:1px solid var(--line,#2a3340)!important;border-radius:12px!important;padding:10px 12px!important;}',
       '.hover-tip.hidden{display:none!important;}',
-      '.statusbar{display:flex!important;align-items:center!important;height:32px!important;}',
-      '.statusbar .tools{margin-left:auto!important;display:flex!important;align-items:center!important;gap:4px!important;}',
+      '.statusbar{display:grid!important;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)!important;align-items:center!important;gap:8px!important;height:32px!important;}',
+      '.statusbar .tools{margin-left:0!important;justify-self:end!important;display:flex!important;align-items:center!important;gap:4px!important;}',
       '.statusbar .icon-btn{width:26px!important;height:26px!important;display:grid!important;place-items:center!important;}'
     ].join('');
     document.head.appendChild(css);

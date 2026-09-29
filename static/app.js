@@ -190,25 +190,42 @@ function wireCardTitle(title, show) {
   title.addEventListener("mouseleave", hideHoverTip);
 }
 
-function setupZoomControl(sliderId, valueId, target) {
+function setupZoomControl(sliderId, valueId, target, settingKey) {
   const slider = $(`#${sliderId}`);
   const value = $(`#${valueId}`);
   if (!slider || !target) return;
+  const stored = Number(state.settings[settingKey]);
+  if (Number.isFinite(stored)) {
+    slider.value = String(Math.max(Number(slider.min), Math.min(Number(slider.max), stored)));
+  }
   const apply = () => {
     const percent = Number(slider.value);
     target.style.zoom = `${percent / 100}`;
     if (value) value.value = `${percent}%`;
   };
   slider.addEventListener("input", apply);
+  slider.addEventListener("change", async () => {
+    const percent = Number(slider.value);
+    state.settings[settingKey] = percent;
+    try {
+      const settings = await api("/api/settings", {
+        method: "POST",
+        body: JSON.stringify({ [settingKey]: percent }),
+      });
+      state.settings = { ...state.settings, ...settings };
+    } catch (_) {
+      // The shared API handler reports persistence failures in Notifications.
+    }
+  });
   apply();
 }
 
 function setupZoomControls() {
-  setupZoomControl("main-zoom-slider", "main-zoom-value", $("#board"));
-  setupZoomControl("picker-zoom-slider", "picker-zoom-value", $("#drawer .panel-content"));
-  setupZoomControl("settings-zoom-slider", "settings-zoom-value", $("#settings-form"));
-  setupZoomControl("notify-zoom-slider", "notify-zoom-value", $("#notify-list"));
-  setupZoomControl("details-zoom-slider", "details-zoom-value", $("#show-details-content"));
+  setupZoomControl("main-zoom-slider", "main-zoom-value", $("#board"), "mainZoom");
+  setupZoomControl("picker-zoom-slider", "picker-zoom-value", $("#drawer .panel-content"), "pickerZoom");
+  setupZoomControl("settings-zoom-slider", "settings-zoom-value", $("#settings-form"), "settingsZoom");
+  setupZoomControl("notify-zoom-slider", "notify-zoom-value", $("#notify-list"), "notificationsZoom");
+  setupZoomControl("details-zoom-slider", "details-zoom-value", $("#show-details-content"), "detailsZoom");
 }
 
 function countdown(iso) {
@@ -507,16 +524,43 @@ async function openShowDetails(showId, event) {
     title.textContent = show.title || "Show details";
     const sources = document.createElement("div");
     sources.className = "show-sources";
-    for (const link of (show.sourceLinks || [{ name: show.sourceName || "Source", url: show.sourceUrl }])) {
+    const anischedule = (show.sourceLinks || []).find((link) => link.name === "AniSchedule")?.url || "https://github.com/RockinChaos/AniSchedule/tree/master/readable";
+    const sourceLinks = [
+      { name: "AniList", url: show.sourceUrl || show.siteUrl || `https://anilist.co/anime/${show.id}` },
+      { name: "AniSchedule", url: anischedule },
+      { name: "MyAnimeList", url: show.idMal ? `https://myanimelist.net/anime/${show.idMal}` : `https://myanimelist.net/anime.php?q=${encodeURIComponent(show.title || "")}` },
+      { name: "HiAnime", url: `https://hianime.to/search?keyword=${encodeURIComponent(show.title || "")}` },
+    ];
+    for (const link of sourceLinks) {
       if (!link.url) continue;
       const source = document.createElement("a");
       source.href = link.url;
-      source.textContent = `Open ${link.name} data`;
+      source.target = "_blank";
+      source.rel = "noopener noreferrer";
+      source.textContent = link.name;
       sources.appendChild(source);
     }
     const heading = document.createElement("div");
     heading.className = "show-details-heading";
-    heading.append(title, sources);
+    heading.append(title);
+    const nexusButton = document.createElement("button");
+    nexusButton.type = "button";
+    nexusButton.className = "nexus-open-button";
+    nexusButton.textContent = "Open Anime Nexus";
+    nexusButton.addEventListener("click", async () => {
+      const override = nexusInput.value.trim();
+      const url = override || `https://anime.nexus/series?search=${encodeURIComponent(show.title || "")}`;
+      try {
+        await api("/api/open", { method: "POST", body: JSON.stringify({ url }) });
+      } catch (_) {
+        // The shared API handler reports the failure in Notifications.
+      }
+    });
+    const nexusInput = document.createElement("input");
+    nexusInput.className = "nexus-url-input";
+    nexusInput.type = "url";
+    nexusInput.placeholder = "Optional Anime Nexus link";
+    nexusInput.setAttribute("aria-label", "Optional Anime Nexus link");
     const description = document.createElement("p");
     description.className = "show-description";
     description.textContent = show.description || "No description available.";
@@ -528,7 +572,7 @@ async function openShowDetails(showId, event) {
       row.innerHTML = `<b>Episode ${episode.episode}</b><span>${episode.source.toUpperCase()}</span><time>${episode.airDate}</time>`;
       list.appendChild(row);
     }
-    content.replaceChildren(heading, description, list);
+    content.replaceChildren(heading, sources, nexusButton, nexusInput, description, list);
   } catch (error) {
     if (!error.__reported) reportError(error, "Could not load show details");
     content.textContent = `Could not load show details: ${error.message}`;
@@ -820,7 +864,6 @@ function syncDrawerFade() {
 }
 
 function wire() {
-  setupZoomControls();
   const notifyPanel = $("#notify-panel");
   const notifyClose = $("#notify-close");
   const notifyButton = $("#btn-notifications");
@@ -924,6 +967,7 @@ async function boot() {
   wire();
   state.meta = await api("/api/meta");
   state.settings = state.meta.settings || {};
+  setupZoomControls();
   state.pickerSeason = state.meta.season;
   state.pickerYear = state.meta.year;
   $("#season-chip").textContent = `${state.meta.season} ${state.meta.year}`;

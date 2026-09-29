@@ -54,6 +54,23 @@ def test_cache_round_trip_uses_sqlite(monkeypatch, tmp_path) -> None:
     assert tracker_lib.cache_get("demo.json", 60) == {"a": 1, "b": [2, 3]}
 
 
+def test_zoom_settings_default_and_persist(monkeypatch, tmp_path) -> None:
+    import tracker_lib
+
+    monkeypatch.setattr(tracker_lib, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(tracker_lib, "SETTINGS_PATH", tmp_path / "settings.json")
+
+    zoom_keys = ("mainZoom", "pickerZoom", "settingsZoom", "notificationsZoom", "detailsZoom")
+    defaults = tracker_lib.load_settings()
+    assert all(defaults[key] == 100 for key in zoom_keys)
+
+    tracker_lib.save_json(tracker_lib.SETTINGS_PATH, {"mainZoom": 125, "detailsZoom": 85})
+    persisted = tracker_lib.load_settings()
+    assert persisted["mainZoom"] == 125
+    assert persisted["detailsZoom"] == 85
+    assert persisted["pickerZoom"] == 100
+
+
 def test_populate_weekly_schedule_skips_rows_missing_anime_id(monkeypatch, tmp_path) -> None:
     import sqlite3
 

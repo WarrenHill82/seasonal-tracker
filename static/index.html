@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Anime Seasonal Tracker</title>
-  <link rel="stylesheet" href="/style.css?v=bar11" />
-  <link rel="stylesheet" href="/compact.css?v=bar11" />
+  <link rel="stylesheet" href="/style.css?v=zoom1" />
+  <link rel="stylesheet" href="/compact.css?v=zoom1" />
 </head>
 <body>
   <div id="app">
@@ -18,6 +18,7 @@
         <button type="button" data-range="week_after">Following</button>
         <button type="button" data-range="library">My shows</button>
       </nav>
+      <label class="zoom-control main-zoom" for="main-zoom-slider">Zoom <input id="main-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="main-zoom-value">100%</output></label>
       <div class="tools">
         <button type="button" id="btn-compact" hidden></button>
         <button type="button" id="btn-layout" class="icon-btn" aria-label="Bar / Row">
@@ -30,7 +31,6 @@
           <span id="notify-badge" class="notify-badge hidden" aria-hidden="true"></span>
         </button>
       </div>
-      <label class="zoom-control main-zoom" for="main-zoom-slider">Zoom <input id="main-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="main-zoom-value">100%</output></label>
     </footer>
   </div>
   <aside id="drawer" class="drawer drawer-picker hidden">
@@ -74,12 +74,12 @@
   <div hidden><span id="range-label"></span><span id="season-chip"></span></div>
   <div id="toast" class="toast hidden"></div>
   <div id="hover-tip" class="hover-tip hidden"></div>
-  <script src="/app.js"></script>
-  <script src="/chrome.js"></script>
-  <script src="/pills.js"></script>
-  <script src="/count-fix.js"></script>
-  <script src="/weeks.js"></script>
-  <script src="/sort.js"></script>
-  <script src="/week-fix.js"></script>
+  <script src="/app.js?v=zoom1"></script>
+  <script src="/chrome.js?v=zoom1"></script>
+  <script src="/pills.js?v=zoom1"></script>
+  <script src="/count-fix.js?v=zoom1"></script>
+  <script src="/weeks.js?v=zoom1"></script>
+  <script src="/sort.js?v=zoom1"></script>
+  <script src="/week-fix.js?v=zoom1"></script>
 </body>
 </html>

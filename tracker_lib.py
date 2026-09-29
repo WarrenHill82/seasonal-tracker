@@ -43,6 +43,11 @@ DEFAULT_SETTINGS = {
     "weekStart": "sunday",
     "opacity": 0.97,
     "titleLanguage": "english",
+    "mainZoom": 100,
+    "pickerZoom": 100,
+    "settingsZoom": 100,
+    "notificationsZoom": 100,
+    "detailsZoom": 100,
 }
 
 

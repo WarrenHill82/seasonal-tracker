@@ -40,6 +40,7 @@ from tracker_lib import (
     schedule_view_payload,
     season_of,
     sync_library_schedule,
+    write_error_log,
     SETTINGS_PATH,
 )
 
@@ -48,7 +49,10 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(STATIC), **kwargs)
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        sys.stderr.write("[tracker] " + (fmt % args) + "\n")
+        message = fmt % args
+        sys.stderr.write("[tracker] " + message + "\n")
+        if '" 4' in message or '" 5' in message:
+            write_error_log("HTTP error", message)
 
     def _send(self, code: int, payload: Any) -> None:
         raw = json.dumps(payload).encode()
@@ -145,9 +149,11 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send(200, enrich_show(show, sub_map, dub_map, dub_feed))
                 return
         except HTTPError as exc:
+            write_error_log("GET request failed", exc=exc)
             self._send(502, {"error": f"upstream {exc.code}", "detail": str(exc)})
             return
         except Exception as exc:  # noqa: BLE001
+            write_error_log("GET request failed", exc=exc)
             self._send(500, {"error": str(exc)})
             return
         super().do_GET()
@@ -156,6 +162,14 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             body = self._read_json()
+            if parsed.path == "/api/client-error":
+                context = str(body.get("context") or "Browser error")[:300]
+                message = str(body.get("message") or "Unknown browser error")[:2000]
+                stack = str(body.get("stack") or "")[:6000]
+                detail = f"{message}\n{stack}" if stack else message
+                write_error_log(context, detail=detail)
+                self._send(204, None)
+                return
             if parsed.path == "/api/open":
                 target = str(body.get("url") or "")
                 parsed_target = urlparse(target)
@@ -229,6 +243,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send(200, self._library_payload())
                 return
         except Exception as exc:  # noqa: BLE001
+            write_error_log("POST request failed", exc=exc)
             self._send(500, {"error": str(exc)})
             return
         self._send(404, {"error": "not found"})
@@ -287,6 +302,7 @@ def main() -> None:
     try:
         build_library_schedule()
     except Exception as exc:  # noqa: BLE001
+        write_error_log("Startup schedule refresh failed", exc=exc)
         print(f"Schedule refresh skipped: {exc}", file=sys.stderr)
 
     port = int(os.environ.get("SEASONAL_TRACKER_PORT", "8765"))

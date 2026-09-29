@@ -30,17 +30,21 @@
           <span id="notify-badge" class="notify-badge hidden" aria-hidden="true"></span>
         </button>
       </div>
+      <label class="zoom-control main-zoom" for="main-zoom-slider">Zoom <input id="main-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="main-zoom-value">100%</output></label>
     </footer>
   </div>
   <aside id="drawer" class="drawer drawer-picker hidden">
     <div class="drawer-head"><h2>Add seasonal shows</h2><button type="button" id="drawer-close">Close</button></div>
-    <div class="picker-bar">
-      <div id="season-select" class="select season-select"></div>
-      <input id="search" type="search" placeholder="Search titles…" />
-      <div class="seg" id="picker-layout"><button type="button" data-pick="tiles" class="active">Tiles</button><button type="button" data-pick="rows">Rows</button></div>
+    <div class="panel-content">
+      <div class="picker-bar">
+        <div id="season-select" class="select season-select"></div>
+        <input id="search" type="search" placeholder="Search titles…" />
+        <div class="seg" id="picker-layout"><button type="button" data-pick="tiles" class="active">Tiles</button><button type="button" data-pick="rows">Rows</button></div>
+      </div>
+      <div id="picker-grid" class="picker-grid tiles"></div>
+      <div class="pager"><button type="button" id="page-prev">Prev</button><span id="page-info"></span><button type="button" id="page-next">Next</button></div>
     </div>
-    <div id="picker-grid" class="picker-grid tiles"></div>
-    <div class="pager"><button type="button" id="page-prev">Prev</button><span id="page-info"></span><button type="button" id="page-next">Next</button></div>
+    <label class="zoom-control panel-zoom" for="picker-zoom-slider">Zoom <input id="picker-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="picker-zoom-value">100%</output></label>
   </aside>
   <aside id="settings" class="drawer drawer-settings hidden">
     <div class="drawer-head"><h2>Widget settings</h2><button type="button" id="settings-close">Close</button></div>
@@ -52,6 +56,7 @@
       <button type="submit" class="primary">Save</button>
       <div class="reload-row"><button type="button" id="btn-reload-ui">Reload UI</button><button type="button" id="btn-reload-widget" class="primary">Reload widget</button></div>
     </form>
+    <label class="zoom-control panel-zoom" for="settings-zoom-slider">Zoom <input id="settings-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="settings-zoom-value">100%</output></label>
   </aside>
   <aside id="notify-panel" class="notify-panel hidden" aria-live="polite">
     <div class="notify-head">
@@ -59,10 +64,12 @@
       <button type="button" id="notify-close">Close</button>
     </div>
     <div id="notify-list" class="notify-list"></div>
+    <label class="zoom-control panel-zoom" for="notify-zoom-slider">Zoom <input id="notify-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="notify-zoom-value">100%</output></label>
   </aside>
   <aside id="show-details" class="drawer show-details hidden">
     <div class="drawer-head"><h2>Show details</h2><button type="button" id="show-details-close">Close</button></div>
     <div id="show-details-content" class="show-details-content"></div>
+    <label class="zoom-control panel-zoom" for="details-zoom-slider">Zoom <input id="details-zoom-slider" type="range" min="75" max="150" value="100" step="5" /><output id="details-zoom-value">100%</output></label>
   </aside>
   <div hidden><span id="range-label"></span><span id="season-chip"></span></div>
   <div id="toast" class="toast hidden"></div>
@@ -70,7 +77,6 @@
   <script src="/app.js"></script>
   <script src="/chrome.js"></script>
   <script src="/pills.js"></script>
-  <script src="/nexus-click.js"></script>
   <script src="/count-fix.js"></script>
   <script src="/weeks.js"></script>
   <script src="/sort.js"></script>

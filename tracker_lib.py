@@ -8,6 +8,7 @@ import os
 import sqlite3
 import threading
 import time
+import traceback
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -21,6 +22,8 @@ LIBRARY_PATH = DATA_DIR / "library.json"
 SETTINGS_PATH = DATA_DIR / "settings.json"
 CACHE_DIR = DATA_DIR / "cache"
 DB_PATH = DATA_DIR / "tracker.db"
+ERROR_LOG_PATH = DATA_DIR / "errors.log"
+ERROR_LOG_LOCK = threading.Lock()
 
 ANILIST = "https://graphql.anilist.co"
 ANISCHEDULE_RAW = "https://raw.githubusercontent.com/RockinChaos/AniSchedule/master/readable"
@@ -41,6 +44,22 @@ DEFAULT_SETTINGS = {
     "opacity": 0.97,
     "titleLanguage": "english",
 }
+
+
+def write_error_log(context: str, detail: str = "", exc: BaseException | None = None) -> None:
+    """Append runtime failures to the user's persistent application log."""
+    parts = [f"[{now_utc().isoformat()}] {context}"]
+    if detail:
+        parts.append(str(detail))
+    if exc is not None:
+        parts.append("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip())
+    try:
+        ERROR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with ERROR_LOG_LOCK, ERROR_LOG_PATH.open("a", encoding="utf-8") as log:
+            log.write("\n".join(parts) + "\n")
+    except OSError:
+        # Logging must never prevent the application from serving requests.
+        pass
 
 SEASONS = ("WINTER", "SPRING", "SUMMER", "FALL")
 

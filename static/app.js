@@ -57,6 +57,16 @@ function notify(type, title, detail = "") {
 function reportError(err, context = "Request failed") {
   const message = err && err.message ? err.message : String(err || "Unknown error");
   notify("error", context, message);
+  fetch("/api/client-error", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      context,
+      message,
+      stack: err && err.stack ? err.stack : "",
+    }),
+    keepalive: true,
+  }).catch(() => {});
 }
 
 function toast(msg) {
@@ -100,10 +110,105 @@ window.api = api;
 window.reportError = reportError;
 window.notify = notify;
 
+window.addEventListener("error", (event) => {
+  const error = event.error || new Error(event.message || "Unhandled browser error");
+  if (!error.__reported) {
+    error.__reported = true;
+    reportError(error, "Unhandled browser error");
+  }
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  const error = event.reason instanceof Error ? event.reason : new Error(String(event.reason || "Unhandled promise rejection"));
+  if (!error.__reported) {
+    error.__reported = true;
+    reportError(error, "Unhandled promise rejection");
+  }
+});
+
 function fmtTime(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function fmtDateTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function showHasDub(show) {
+  return (show.dubAired || 0) > 0 || !!show.hasDubSchedule || (show.nextEvents || []).some((event) => event.kind === "dub");
+}
+
+function nextAirEvent(show, kind) {
+  const now = Date.now() - 60 * 1000;
+  const events = (show.nextEvents || []).concat(kind === "sub" ? (show.upcomingSub || []) : []);
+  const matches = events
+    .filter((event) => {
+      if (!event || !event.at || (kind === "dub" && event.kind !== "dub") || (kind === "sub" && event.kind && event.kind !== "sub")) return false;
+      return new Date(event.at).getTime() >= now;
+    })
+    .sort((a, b) => new Date(a.at) - new Date(b.at));
+  if (matches[0]) return matches[0];
+  if (kind === "sub" && show.nextSubAt && new Date(show.nextSubAt).getTime() >= now) {
+    return { at: show.nextSubAt, episode: show.nextSubEpisode };
+  }
+  return null;
+}
+
+function cardTitleTip(show) {
+  const parts = [];
+  const sub = nextAirEvent(show, "sub");
+  const dub = nextAirEvent(show, "dub");
+  parts.push(`<strong>${show.title}</strong>`);
+  parts.push(`<span class="chip sub">${sub ? `SUB ep ${sub.episode || "?"} · ${fmtDateTime(sub.at)}` : "SUB finished"}</span>`);
+  if (showHasDub(show) || dub) {
+    parts.push(`<span class="chip dub">${dub ? `DUB ep ${dub.episode || "?"} · ${fmtDateTime(dub.at)}` : "DUB finished"}</span>`);
+  }
+  return `${parts[0]}<div class="meta">${parts.slice(1).join("")}</div>`;
+}
+
+function placeHoverTip(html, element) {
+  const tip = $("#hover-tip");
+  if (!tip) return;
+  tip.innerHTML = html;
+  tip.classList.remove("hidden");
+  const rect = element.getBoundingClientRect();
+  tip.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - 320))}px`;
+  tip.style.top = `${Math.min(rect.bottom + 8, innerHeight - 120)}px`;
+}
+
+function hideHoverTip() {
+  $("#hover-tip")?.classList.add("hidden");
+}
+
+function wireCardTitle(title, show) {
+  title.addEventListener("mouseenter", () => placeHoverTip(cardTitleTip(show), title));
+  title.addEventListener("mouseleave", hideHoverTip);
+}
+
+function setupZoomControl(sliderId, valueId, target) {
+  const slider = $(`#${sliderId}`);
+  const value = $(`#${valueId}`);
+  if (!slider || !target) return;
+  const apply = () => {
+    const percent = Number(slider.value);
+    target.style.zoom = `${percent / 100}`;
+    if (value) value.value = `${percent}%`;
+  };
+  slider.addEventListener("input", apply);
+  apply();
+}
+
+function setupZoomControls() {
+  setupZoomControl("main-zoom-slider", "main-zoom-value", $("#board"));
+  setupZoomControl("picker-zoom-slider", "picker-zoom-value", $("#drawer .panel-content"));
+  setupZoomControl("settings-zoom-slider", "settings-zoom-value", $("#settings-form"));
+  setupZoomControl("notify-zoom-slider", "notify-zoom-value", $("#notify-list"));
+  setupZoomControl("details-zoom-slider", "details-zoom-value", $("#show-details-content"));
 }
 
 function countdown(iso) {
@@ -318,6 +423,7 @@ function renderRow(show) {
     </div>
   `;
   const body = card.querySelector(".row-body");
+  wireCardTitle(card.querySelector("h4"), show);
   appendTracks(body, show, "row");
   card.querySelector("[data-act=remove]").addEventListener("click", () => removeShow(show.id));
   return card;
@@ -339,6 +445,7 @@ function renderStack(show) {
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.innerHTML = showMeta(show);
+  wireCardTitle(h, show);
   if (posterTop) {
     card.appendChild(img);
     card.appendChild(h);
@@ -407,22 +514,6 @@ async function openShowDetails(showId, event) {
       source.textContent = `Open ${link.name} data`;
       sources.appendChild(source);
     }
-    let nexusUrl = show.nexusUrl || "";
-    try {
-      const nexusMap = JSON.parse(localStorage.getItem("st-nexus-urls") || "{}");
-      nexusUrl = nexusUrl || nexusMap[String(show.id)] || "";
-    } catch (_) {
-      nexusUrl = "";
-    }
-    const nexusLabel = document.createElement("label");
-    nexusLabel.className = "nexus-link-field";
-    nexusLabel.textContent = "Anime Nexus link";
-    const nexusInput = document.createElement("input");
-    nexusInput.type = "text";
-    nexusInput.readOnly = true;
-    nexusInput.value = nexusUrl;
-    nexusInput.placeholder = "No Anime Nexus link set";
-    nexusLabel.appendChild(nexusInput);
     const heading = document.createElement("div");
     heading.className = "show-details-heading";
     heading.append(title, sources);
@@ -437,8 +528,9 @@ async function openShowDetails(showId, event) {
       row.innerHTML = `<b>Episode ${episode.episode}</b><span>${episode.source.toUpperCase()}</span><time>${episode.airDate}</time>`;
       list.appendChild(row);
     }
-    content.replaceChildren(heading, nexusLabel, description, list);
+    content.replaceChildren(heading, description, list);
   } catch (error) {
+    if (!error.__reported) reportError(error, "Could not load show details");
     content.textContent = `Could not load show details: ${error.message}`;
   }
 }
@@ -535,10 +627,15 @@ function markPickerItem(id, inLibrary) {
 }
 
 async function removeShow(id) {
-  await api("/api/library/remove", { method: "POST", body: JSON.stringify({ id }) });
+  const data = await api("/api/library/remove", { method: "POST", body: JSON.stringify({ id }) });
   toast("Removed from widget");
   markPickerItem(id, false);
-  await loadSchedule();
+  state.library = data.shows || state.library.filter((show) => Number(show.id) !== Number(id));
+  if (state.range === "library") {
+    renderBoard();
+  } else {
+    await loadSchedule();
+  }
 }
 
 async function addShow(item) {
@@ -666,6 +763,7 @@ async function loadPicker(query) {
     if (!media.length) grid.innerHTML = "<p class='hint'>No titles on this page.</p>";
     grid.scrollTop = scrollTop;
   } catch (err) {
+    if (!err.__reported) reportError(err, "Could not load catalog");
     grid.innerHTML = `<p class="hint">Could not load catalog: ${err.message}</p>`;
   }
 }
@@ -722,6 +820,7 @@ function syncDrawerFade() {
 }
 
 function wire() {
+  setupZoomControls();
   const notifyPanel = $("#notify-panel");
   const notifyClose = $("#notify-close");
   const notifyButton = $("#btn-notifications");

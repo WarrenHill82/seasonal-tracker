@@ -80,35 +80,6 @@
     if (show.status === 'FINISHED') return ' finished';
     return '';
   }
-  function fmtWhen(at) {
-    if (typeof fmtTime === 'function') return fmtTime(at);
-    const d = new Date(at);
-    if (Number.isNaN(d.getTime())) return '';
-    return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  }
-  function titleTip(show) {
-    const total = show.episodes || 12;
-    const subDone = viewAired(show, 'sub') >= Number(total) || show.status === 'FINISHED';
-    const dubExists = hasDub(show);
-    const dubDone = !dubExists || viewAired(show, 'dub') >= Number(total);
-    if (subDone && dubDone) {
-      return '<strong>' + show.title + '</strong><div class="meta"><span class="chip dub">Finished</span></div>';
-    }
-    const bits = [];
-    const subEv = (show.nextEvents || []).find(function (e) { return e.kind === 'sub'; }) || (show.nextSubAt ? { at: show.nextSubAt, episode: show.nextSubEpisode } : null);
-    const dubEv = (show.nextEvents || []).find(function (e) { return e.kind === 'dub'; });
-    if (!subDone && subEv && subEv.at) bits.push('<span class="chip sub">SUB ep ' + (subEv.episode || '?') + ' · ' + fmtWhen(subEv.at) + '</span>');
-    else if (subDone) bits.push('<span class="chip sub">SUB finished</span>');
-    if (dubExists) {
-      if (!dubDone && dubEv && dubEv.at) bits.push('<span class="chip dub">DUB ep ' + (dubEv.episode || '?') + ' · ' + fmtWhen(dubEv.at) + '</span>');
-      else if (dubDone) bits.push('<span class="chip dub">DUB finished</span>');
-    }
-    if (!bits.length) bits.push('<span class="chip">No upcoming air date</span>');
-    return '<strong>' + show.title + '</strong><div class="meta">' + bits.join('') + '</div>';
-  }
-  function nexusSearch(title) {
-    return 'https://anime.nexus/series?search=' + encodeURIComponent(title || '');
-  }
   function localKey(d) {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
@@ -167,7 +138,10 @@
     }
     const title = document.createElement('h4');
     title.textContent = show.title;
-    title.addEventListener('mouseenter', function () { placeTip(titleTip(show), title); });
+    title.addEventListener('mouseenter', function () {
+      const html = typeof cardTitleTip === 'function' ? cardTitleTip(show) : pillTip(show, 'sub');
+      placeTip(html, title);
+    });
     title.addEventListener('mouseleave', hideTip);
     const tiles = document.createElement('div');
     tiles.className = 'remain-tiles';

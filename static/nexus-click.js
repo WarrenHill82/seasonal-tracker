@@ -136,6 +136,12 @@
     input.className = 'nexus-input';
     input.value = opened;
     input.spellcheck = false;
+    input.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+    });
+    input.addEventListener('mousedown', function (ev) {
+      ev.stopPropagation();
+    });
     titleEl.replaceWith(input);
     input.focus();
     input.select();

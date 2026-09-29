@@ -26,6 +26,7 @@ from tracker_lib import (
     db_show_details,
     db_add_library_show,
     db_remove_library_show,
+    db_update_library_progress,
     enrich_show,
     HUB,
     load_library,
@@ -140,7 +141,7 @@ class Handler(SimpleHTTPRequestHandler):
                 sub_map, dub_map, dub_feed = build_maps()
                 lib = {int(s["id"]): s for s in load_library()}
                 if mid in lib:
-                    show.update({k: lib[mid][k] for k in ("watchedSub", "watchedDub", "note") if k in lib[mid]})
+                    show.update({k: lib[mid][k] for k in ("watchedSub", "watchedDub", "note", "nexusUrl") if k in lib[mid]})
                 self._send(200, enrich_show(show, sub_map, dub_map, dub_feed))
                 return
         except HTTPError as exc:
@@ -155,6 +156,15 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             body = self._read_json()
+            if parsed.path == "/api/open":
+                target = str(body.get("url") or "")
+                parsed_target = urlparse(target)
+                if parsed_target.scheme not in {"http", "https"} or not parsed_target.netloc:
+                    self._send(400, {"error": "invalid external URL"})
+                    return
+                webbrowser.open(target)
+                self._send(200, {"opened": True})
+                return
             if parsed.path == "/api/sync":
                 self._send(200, sync_library_schedule())
                 return
@@ -212,7 +222,10 @@ class Handler(SimpleHTTPRequestHandler):
                             show["watchedDub"] = max(0, int(body["watchedDub"]))
                         if "note" in body:
                             show["note"] = str(body["note"])
+                        if "nexusUrl" in body:
+                            show["nexusUrl"] = str(body["nexusUrl"])
                 save_library(shows)
+                db_update_library_progress(sid, **body)
                 self._send(200, self._library_payload())
                 return
         except Exception as exc:  # noqa: BLE001

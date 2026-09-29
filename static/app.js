@@ -398,14 +398,34 @@ async function openShowDetails(showId, event) {
     const show = await api(`/api/show/${showId}`);
     const title = document.createElement("h2");
     title.textContent = show.title || "Show details";
-    const source = document.createElement("a");
-    source.href = show.sourceUrl || `https://anilist.co/anime/${show.id}`;
-    source.target = "_blank";
-    source.rel = "noopener noreferrer";
-    source.textContent = "Open source data";
+    const sources = document.createElement("div");
+    sources.className = "show-sources";
+    for (const link of (show.sourceLinks || [{ name: show.sourceName || "Source", url: show.sourceUrl }])) {
+      if (!link.url) continue;
+      const source = document.createElement("a");
+      source.href = link.url;
+      source.textContent = `Open ${link.name} data`;
+      sources.appendChild(source);
+    }
+    let nexusUrl = show.nexusUrl || "";
+    try {
+      const nexusMap = JSON.parse(localStorage.getItem("st-nexus-urls") || "{}");
+      nexusUrl = nexusUrl || nexusMap[String(show.id)] || "";
+    } catch (_) {
+      nexusUrl = "";
+    }
+    const nexusLabel = document.createElement("label");
+    nexusLabel.className = "nexus-link-field";
+    nexusLabel.textContent = "Anime Nexus link";
+    const nexusInput = document.createElement("input");
+    nexusInput.type = "text";
+    nexusInput.readOnly = true;
+    nexusInput.value = nexusUrl;
+    nexusInput.placeholder = "No Anime Nexus link set";
+    nexusLabel.appendChild(nexusInput);
     const heading = document.createElement("div");
     heading.className = "show-details-heading";
-    heading.append(title, source);
+    heading.append(title, sources);
     const description = document.createElement("p");
     description.className = "show-description";
     description.textContent = show.description || "No description available.";
@@ -417,7 +437,7 @@ async function openShowDetails(showId, event) {
       row.innerHTML = `<b>Episode ${episode.episode}</b><span>${episode.source.toUpperCase()}</span><time>${episode.airDate}</time>`;
       list.appendChild(row);
     }
-    content.replaceChildren(heading, description, list);
+    content.replaceChildren(heading, nexusLabel, description, list);
   } catch (error) {
     content.textContent = `Could not load show details: ${error.message}`;
   }
@@ -755,6 +775,12 @@ function wire() {
     syncDrawerFade();
   });
   $("#show-details-close").addEventListener("click", () => $("#show-details").classList.add("hidden"));
+  document.addEventListener("mousedown", (event) => {
+    const panel = $("#show-details");
+    if (!panel.classList.contains("hidden") && !panel.contains(event.target)) {
+      panel.classList.add("hidden");
+    }
+  });
   $("#settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const form = ev.target;

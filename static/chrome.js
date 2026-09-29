@@ -167,11 +167,6 @@
     }
     const title = document.createElement('h4');
     title.textContent = show.title;
-    title.addEventListener('click', function (ev) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      window.open(nexusSearch(show.title), '_blank', 'noopener');
-    });
     title.addEventListener('mouseenter', function () { placeTip(titleTip(show), title); });
     title.addEventListener('mouseleave', hideTip);
     const tiles = document.createElement('div');

@@ -210,7 +210,8 @@ def ensure_database() -> None:
                 next_sub_at TEXT,
                 watched_sub INTEGER NOT NULL DEFAULT 0,
                 watched_dub INTEGER NOT NULL DEFAULT 0,
-                note TEXT NOT NULL DEFAULT '',
+                    nexus_url TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
                 added_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -272,6 +273,9 @@ def ensure_database() -> None:
             conn.execute(
                 "UPDATE library SET title_jap = title WHERE title_jap IS NULL"
             )
+        library_cols = {row[1] for row in conn.execute("PRAGMA table_info(library)").fetchall()}
+        if "nexus_url" not in library_cols:
+            conn.execute("ALTER TABLE library ADD COLUMN nexus_url TEXT NOT NULL DEFAULT ''")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_media_season ON media (season_key, season_year, season)"
@@ -372,7 +376,15 @@ def db_show_details(show_id: int, lang: str = "english") -> dict:
     """Return persisted media metadata and normalized episode air dates."""
     ensure_database()
     with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute("SELECT raw_json FROM media WHERE id = ?", (int(show_id),)).fetchone()
+        row = conn.execute(
+            """
+            SELECT media.raw_json, COALESCE(library.nexus_url, '')
+            FROM media
+            LEFT JOIN library ON library.id = media.id
+            WHERE media.id = ?
+            """,
+            (int(show_id),),
+        ).fetchone()
         schedule_rows = conn.execute(
             """
             SELECT episode, air_date, air_ts, source
@@ -388,6 +400,9 @@ def db_show_details(show_id: int, lang: str = "english") -> dict:
     show = compact_media(media, lang)
     show["description"] = media.get("description") or ""
     show["sourceUrl"] = media.get("siteUrl") or f"https://anilist.co/anime/{int(show_id)}"
+    show["sourceName"] = "AniList"
+    show["sourceLinks"] = [{"name": "AniList", "url": show["sourceUrl"]}]
+    show["nexusUrl"] = row[1] or ""
     episodes: dict[tuple[int, str], dict] = {}
     for node in ((media.get("airingSchedule") or {}).get("nodes") or []):
         when = parse_airing(node.get("airingAt"))
@@ -408,6 +423,11 @@ def db_show_details(show_id: int, lang: str = "english") -> dict:
             "airAt": datetime.fromtimestamp(int(air_ts), timezone.utc).isoformat(),
             "source": kind,
         }
+    if schedule_rows:
+        show["sourceLinks"].append({
+            "name": "AniSchedule",
+            "url": "https://github.com/RockinChaos/AniSchedule/tree/master/readable",
+        })
     show["episodesSchedule"] = sorted(episodes.values(), key=lambda item: (item["airAt"], item["source"]))
     return show
 
@@ -851,7 +871,7 @@ def db_get_library() -> list[dict]:
             """
             SELECT id, id_mal, title, title_jap, cover, color, episodes, format,
                    status, season, season_year, next_sub_episode, next_sub_at,
-                   watched_sub, watched_dub, note, added_at, updated_at
+                   watched_sub, watched_dub, nexus_url, note, added_at, updated_at
             FROM library
             ORDER BY updated_at DESC
             """
@@ -875,9 +895,10 @@ def db_get_library() -> list[dict]:
                 "nextSubAt": row[12],
                 "watchedSub": row[13],
                 "watchedDub": row[14],
-                "note": row[15],
-                "addedAt": row[16],
-                "updatedAt": row[17],
+                "nexusUrl": row[15],
+                "note": row[16],
+                "addedAt": row[17],
+                "updatedAt": row[18],
             }
         )
     return out
@@ -903,6 +924,7 @@ def db_add_library_show(payload: dict) -> list[dict]:
         "nextSubAt": payload.get("nextSubAt"),
         "watchedSub": int(payload.get("watchedSub", 0) or 0),
         "watchedDub": int(payload.get("watchedDub", 0) or 0),
+            "nexusUrl": payload.get("nexusUrl") or "",
         "note": payload.get("note") or "",
         "addedAt": payload.get("addedAt") or now,
         "updatedAt": now,
@@ -913,11 +935,11 @@ def db_add_library_show(payload: dict) -> list[dict]:
             INSERT INTO library (
                 id, id_mal, title, title_jap, cover, color, episodes, format,
                 status, season, season_year, next_sub_episode, next_sub_at,
-                watched_sub, watched_dub, note, added_at, updated_at
+                watched_sub, watched_dub, nexus_url, note, added_at, updated_at
             ) VALUES (
                 :id, :idMal, :title, :titleJap, :cover, :color, :episodes, :format,
                 :status, :season, :seasonYear, :nextSubEpisode, :nextSubAt,
-                :watchedSub, :watchedDub, :note, :addedAt, :updatedAt
+                :watchedSub, :watchedDub, :nexusUrl, :note, :addedAt, :updatedAt
             )
             ON CONFLICT(id) DO UPDATE SET
                 id_mal = excluded.id_mal,
@@ -934,6 +956,7 @@ def db_add_library_show(payload: dict) -> list[dict]:
                 next_sub_at = excluded.next_sub_at,
                 watched_sub = excluded.watched_sub,
                 watched_dub = excluded.watched_dub,
+                                nexus_url = excluded.nexus_url,
                 note = excluded.note,
                 updated_at = excluded.updated_at
             """,
@@ -960,6 +983,8 @@ def db_update_library_progress(show_id: int, **kwargs: Any) -> list[dict]:
         updates["watched_dub"] = max(0, int(kwargs["watchedDub"]))
     if "note" in kwargs:
         updates["note"] = str(kwargs["note"])
+    if "nexusUrl" in kwargs:
+        updates["nexus_url"] = str(kwargs["nexusUrl"])
     if not updates or len(updates) == 1:
         return db_get_library()
     assignments = ", ".join(f"{key} = ?" for key in updates)
@@ -1183,6 +1208,7 @@ def pick_title(title: dict | None, lang: str) -> str:
 def compact_media(media: dict, lang: str) -> dict:
     nxt = media.get("nextAiringEpisode") or {}
     cover = media.get("coverImage") or {}
+    source_url = media.get("siteUrl") or (f"https://anilist.co/anime/{media.get('id')}" if media.get("id") else None)
     return {
         "id": media.get("id"),
         "idMal": media.get("idMal"),
@@ -1199,6 +1225,9 @@ def compact_media(media: dict, lang: str) -> dict:
         "duration": media.get("duration"),
         "isAdult": media.get("isAdult"),
         "siteUrl": media.get("siteUrl"),
+        "sourceUrl": source_url,
+        "sourceName": "AniList",
+        "sourceLinks": [{"name": "AniList", "url": source_url}] if source_url else [],
         "cover": cover.get("large") or cover.get("medium"),
         "color": cover.get("color"),
         "nextSubEpisode": nxt.get("episode"),

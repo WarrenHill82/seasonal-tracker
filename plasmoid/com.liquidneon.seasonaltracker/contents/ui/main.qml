@@ -38,9 +38,9 @@ PlasmoidItem {
             onNavigationRequested: function(request) {
                 const target = request.url.toString()
                 if (target.startsWith("http://127.0.0.1") || target.startsWith("http://localhost")) {
-                    request.action = WebEngineNavigationRequest.AcceptRequest
+                    request.accept()
                 } else {
-                    request.action = WebEngineNavigationRequest.IgnoreRequest
+                    request.reject()
                     Qt.openUrlExternally(request.url)
                 }
             }

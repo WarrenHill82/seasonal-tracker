@@ -391,6 +391,10 @@ button.active:hover { background: var(--text); }
 .hover-tip { resize: both; }
 .tooltip-airing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; margin-top: 8px; }
 .tooltip-airing-cell { display: flex; min-width: 0; align-items: baseline; gap: 4px; }
+.tooltip-airing-cell.sub.next { grid-column: 1; grid-row: 1; }
+.tooltip-airing-cell.dub.next { grid-column: 2; grid-row: 1; }
+.tooltip-airing-cell.sub.final { grid-column: 1; grid-row: 2; }
+.tooltip-airing-cell.dub.final { grid-column: 2; grid-row: 2; }
 .tooltip-airing-cell strong { flex: 0 0 auto; color: var(--muted); font-size: 9px; }
 .tooltip-airing-date { color: var(--text); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
 .panel-head { gap: 10px; cursor: grab; touch-action: none; user-select: none; }

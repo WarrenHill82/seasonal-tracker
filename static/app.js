@@ -208,8 +208,8 @@ function cardTitleTip(show) {
   const aired = (kind) => typeof window.airedNow === "function"
     ? window.airedNow(show, kind)
     : Number(show[kind === "sub" ? "subAired" : "dubAired"] || 0);
-  const tooltipCell = (kind, label, value) =>
-    `<div class="tooltip-airing-cell"><strong>${label}:</strong><span class="tooltip-airing-date">${value}</span></div>`;
+  const tooltipCell = (kind, row, label, value) =>
+    `<div class="tooltip-airing-cell ${kind} ${row}"><strong>${label}:</strong><span class="tooltip-airing-date">${value}</span></div>`;
   const nextValue = (kind) => {
     const event = nextAirEvent(show, kind);
     if (event) return `Ep ${event.episode || "?"} · ${fmtDateTime(event.at)}`;
@@ -219,17 +219,17 @@ function cardTitleTip(show) {
   const cells = [];
   const subNext = nextValue("sub");
   const dubNext = nextValue("dub");
-  if (subNext) cells.push(tooltipCell("sub", "SUB Next", subNext));
-  if (dubNext) cells.push(tooltipCell("dub", "DUB Next", dubNext));
+  if (subNext) cells.push(tooltipCell("sub", "next", "SUB Next", subNext));
+  if (dubNext) cells.push(tooltipCell("dub", "next", "DUB Next", dubNext));
   const finalSub = show.finalEvents?.sub;
   const finalDub = show.finalEvents?.dub;
   if (finalSub?.at) {
     const label = finalSub.estimated ? "SUB Final Episode (est.)" : "SUB Final Episode";
-    cells.push(tooltipCell("sub", label, `${finalSub.episode || total} · ${fmtDateTime(finalSub.at)}`));
+    cells.push(tooltipCell("sub", "final", label, `${finalSub.episode || total} · ${fmtDateTime(finalSub.at)}`));
   }
   if (finalDub?.at) {
     const label = finalDub.estimated ? "DUB Final Episode (est.)" : "DUB Final Episode";
-    cells.push(tooltipCell("dub", label, `${finalDub.episode || total} · ${fmtDateTime(finalDub.at)}`));
+    cells.push(tooltipCell("dub", "final", label, `${finalDub.episode || total} · ${fmtDateTime(finalDub.at)}`));
   }
   return `<strong>${show.title}</strong><div class="tooltip-airing-grid">${cells.join("")}</div>`;
 }

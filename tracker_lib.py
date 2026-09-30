@@ -10,10 +10,14 @@ import tempfile
 import threading
 import time
 import traceback
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+from itertools import count
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
@@ -29,6 +33,24 @@ ERROR_LOG_LOCK = threading.Lock()
 ANILIST = "https://graphql.anilist.co"
 ANISCHEDULE_RAW = "https://raw.githubusercontent.com/RockinChaos/AniSchedule/master/readable"
 UA = "SeasonalTracker/0.1 (Nobara desktop widget; +local)"
+# AniList currently documents a temporary 30 requests/minute limit.
+ANILIST_REQUESTS_PER_MINUTE = 30
+UPSTREAM_REQUEST_INTERVALS = {
+    "graphql.anilist.co": 60 / ANILIST_REQUESTS_PER_MINUTE * 1.05,
+    "raw.githubusercontent.com": 1.0,
+}
+UPSTREAM_RATE_LOCK = threading.Condition()
+UPSTREAM_REQUEST_PRIORITY: ContextVar[int] = ContextVar("upstream_request_priority", default=0)
+UPSTREAM_NEXT_REQUEST: dict[str, float] = {}
+UPSTREAM_COOLDOWN_UNTIL: dict[str, float] = {}
+UPSTREAM_WAITERS: dict[str, list[tuple[int, int]]] = {}
+UPSTREAM_REQUEST_SEQUENCE = count()
+SEASON_CATALOG_TTL = 3 * 60 * 60
+UPSTREAM_RETRY_DELAY = 1.0
+SEASON_CATALOG_LOCK = threading.Lock()
+SEASON_CATALOG_LOCKS: dict[str, Any] = {}
+STALE_CACHE_WARNING_LOCK = threading.Lock()
+STALE_CACHE_WARNING_AT: dict[str, float] = {}
 
 DEFAULT_SETTINGS = {
     "layout": "rows",
@@ -178,14 +200,168 @@ def parse_airing(value: Any) -> datetime | None:
     return None
 
 
+class UpstreamAPIError(RuntimeError):
+    def __init__(
+        self,
+        provider: str,
+        detail: str,
+        status: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(detail)
+        self.provider = provider
+        self.status = status
+        self.retry_after = retry_after
+
+
+def _rate_limit_slot(host: str, priority: int = 0) -> None:
+    interval = UPSTREAM_REQUEST_INTERVALS.get(host, 1.0)
+    with UPSTREAM_RATE_LOCK:
+        ticket = (priority, next(UPSTREAM_REQUEST_SEQUENCE))
+        waiters = UPSTREAM_WAITERS.setdefault(host, [])
+        waiters.append(ticket)
+        waiters.sort()
+        UPSTREAM_RATE_LOCK.notify_all()
+        try:
+            while True:
+                now = time.monotonic()
+                cooldown_until = UPSTREAM_COOLDOWN_UNTIL.get(host, now)
+                if cooldown_until > now:
+                    retry_after = cooldown_until - now
+                    raise UpstreamAPIError(
+                        host,
+                        f"Requests paused by upstream rate limit for {retry_after:.0f}s",
+                        429,
+                        retry_after,
+                    )
+                next_allowed = UPSTREAM_NEXT_REQUEST.get(host, now)
+                if waiters[0] == ticket and next_allowed <= now:
+                    waiters.pop(0)
+                    UPSTREAM_NEXT_REQUEST[host] = now + interval
+                    UPSTREAM_RATE_LOCK.notify_all()
+                    return
+                delay = max(0.01, next_allowed - now)
+                UPSTREAM_RATE_LOCK.wait(delay)
+        finally:
+            if ticket in waiters:
+                waiters.remove(ticket)
+                UPSTREAM_RATE_LOCK.notify_all()
+
+
+def _retry_after_seconds(headers: Any, default: float | None = None) -> float | None:
+    value = headers.get("Retry-After") if headers else None
+    if value:
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(value)
+                return max(0.0, (retry_at - now_utc()).total_seconds())
+            except (TypeError, ValueError, OverflowError):
+                pass
+    reset = headers.get("X-RateLimit-Reset") if headers else None
+    if reset:
+        try:
+            return max(0.0, float(reset) - time.time())
+        except ValueError:
+            pass
+    return default
+
+
+def _set_upstream_cooldown(host: str, seconds: float) -> None:
+    with UPSTREAM_RATE_LOCK:
+        UPSTREAM_COOLDOWN_UNTIL[host] = max(
+            UPSTREAM_COOLDOWN_UNTIL.get(host, 0.0), time.monotonic() + seconds
+        )
+        UPSTREAM_RATE_LOCK.notify_all()
+
+
+def _observe_rate_headers(host: str, headers: Any) -> None:
+    if not headers:
+        return
+    remaining = headers.get("X-RateLimit-Remaining")
+    if remaining is None or remaining != "0":
+        return
+    reset = None
+    reset_at = headers.get("X-RateLimit-Reset")
+    if reset_at:
+        try:
+            reset = max(0.0, float(reset_at) - time.time())
+        except ValueError:
+            reset = None
+    if reset is not None:
+        _set_upstream_cooldown(host, reset)
+
+
+def _response_detail(raw: bytes, fallback: str) -> tuple[str, int | None]:
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return fallback, None
+    errors = body.get("errors") if isinstance(body, dict) else None
+    if not errors:
+        return fallback, None
+    messages = []
+    status = None
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        messages.append(str(error.get("message") or "Upstream GraphQL error"))
+        extensions = error.get("extensions") or {}
+        value = error.get("status") or extensions.get("status")
+        if status is None and isinstance(value, int):
+            status = value
+    return "; ".join(messages) or fallback, status
+
+
 def http_json(url: str, payload: dict | None = None, timeout: int = 25) -> Any:
+    host = urlparse(url).hostname or "unknown"
+    priority = UPSTREAM_REQUEST_PRIORITY.get()
     body = None if payload is None else json.dumps(payload).encode()
     headers = {"User-Agent": UA, "Accept": "application/json"}
     if body is not None:
         headers["Content-Type"] = "application/json"
     req = Request(url, data=body, headers=headers)
-    with urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode())
+    for attempt in range(2):
+        _rate_limit_slot(host, priority)
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                response_headers = resp.headers
+                raw = resp.read()
+                _observe_rate_headers(host, response_headers)
+                data = json.loads(raw.decode("utf-8"))
+                if isinstance(data, dict) and data.get("errors"):
+                    detail, status = _response_detail(raw, "Upstream GraphQL error")
+                    retry_after = _retry_after_seconds(response_headers)
+                    if status == 429:
+                        retry_after = retry_after if retry_after is not None else 60.0
+                        _set_upstream_cooldown(host, retry_after)
+                    raise UpstreamAPIError(host, detail, status or 502, retry_after)
+                return data
+        except HTTPError as exc:
+            raw = exc.read()
+            fallback = f"HTTP {exc.code}: {exc.reason}"
+            detail, body_status = _response_detail(raw, fallback)
+            status = body_status or exc.code
+            retry_after = _retry_after_seconds(exc.headers)
+            _observe_rate_headers(host, exc.headers)
+            if exc.code == 429 or status == 429:
+                retry_after = retry_after if retry_after is not None else 60.0
+                _set_upstream_cooldown(host, retry_after)
+            elif retry_after is not None:
+                _set_upstream_cooldown(host, retry_after)
+            if attempt == 0 and retry_after is None and (exc.code == 408 or 500 <= exc.code <= 599):
+                time.sleep(UPSTREAM_RETRY_DELAY)
+                continue
+            raise UpstreamAPIError(host, detail, status, retry_after) from exc
+        except (URLError, TimeoutError) as exc:
+            if attempt == 0:
+                time.sleep(UPSTREAM_RETRY_DELAY)
+                continue
+            raise UpstreamAPIError(host, str(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise UpstreamAPIError(host, "Upstream returned invalid JSON", 502) from exc
+    raise UpstreamAPIError(host, "Upstream request failed after retry")
 
 
 def ensure_database() -> None:
@@ -1019,7 +1195,10 @@ def db_add_library_show(payload: dict) -> list[dict]:
 def db_remove_library_show(show_id: int) -> list[dict]:
     ensure_database()
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("DELETE FROM library WHERE id = ?", (int(show_id),))
+        anime_id = int(show_id)
+        conn.execute("DELETE FROM library WHERE id = ?", (anime_id,))
+        conn.execute("DELETE FROM media WHERE id = ?", (anime_id,))
+        conn.execute("DELETE FROM weekly_schedule WHERE anime_id = ?", (anime_id,))
         conn.commit()
     return db_get_library()
 
@@ -1070,6 +1249,32 @@ def cache_get(name: str, ttl: int) -> Any | None:
         # it as a fallback, but the canonical database is the normalized media table.
         return legacy
     return None
+
+
+def cache_get_stale(name: str) -> Any | None:
+    path = CACHE_DIR / name
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def stale_cache_fallback(name: str, error: UpstreamAPIError) -> Any:
+    cached = cache_get_stale(name)
+    if cached is None:
+        raise error
+    now = time.monotonic()
+    with STALE_CACHE_WARNING_LOCK:
+        last_reported = STALE_CACHE_WARNING_AT.get(name, 0)
+        should_report = now - last_reported >= 30 * 60
+        if should_report:
+            STALE_CACHE_WARNING_AT[name] = now
+    if should_report:
+        write_error_log(
+            "Using stale upstream cache",
+            detail=f"{name}: {error.provider} status={error.status}; {error}",
+        )
+    return cached
 
 
 def cache_set(name: str, data: Any) -> None:
@@ -1131,9 +1336,15 @@ class DataHub:
     def anilist(self, query: str, variables: dict | None = None) -> dict:
         return http_json(ANILIST, {"query": query, "variables": variables or {}})
 
-    def fetch_season(self, season: str, year: int, page: int = 1) -> dict:
+    def fetch_season(
+        self,
+        season: str,
+        year: int,
+        page: int = 1,
+        force_refresh: bool = False,
+    ) -> dict:
         key = f"season-v2-{season}-{year}-p{page}.json"
-        cached = cache_get(key, ttl=6 * 3600)
+        cached = None if force_refresh else cache_get(key, ttl=SEASON_CATALOG_TTL)
         if cached is not None:
             media_page = ((cached.get("data") or {}).get("Page") or {}).get("media") or []
             store_media_records(media_page, season, year)
@@ -1159,45 +1370,53 @@ class DataHub:
         store_media_records(media_page, season, year)
         return raw
 
-    def search(self, q: str, season: str | None = None, year: int | None = None) -> dict:
-                query = """
-                query ($q: String, $season: MediaSeason, $seasonYear: Int) {
-                    Page(page: 1, perPage: 20) {
-                        media(search: $q, season: $season, seasonYear: $seasonYear, type: ANIME, sort: SEARCH_MATCH) {
-                            id idMal title { romaji english native }
-                            description(asHtml: false)
-                            episodes format status season seasonYear genres tags { name rank isGeneralSpoiler isMediaSpoiler isAdult } averageScore isAdult siteUrl
-                            coverImage { large medium color }
-                            nextAiringEpisode { episode airingAt timeUntilAiring }
-                        }
-                    }
-                }
-                """
-                raw = self.anilist(query, {"q": q, "season": season, "seasonYear": year})
-                page = ((raw.get("data") or {}).get("Page") or {})
-                if page.get("media"):
-                    return raw
+    def fetch_season_catalog(
+        self,
+        season: str,
+        year: int,
+        force_refresh: bool = False,
+    ) -> dict:
+        catalog_key = f"{season}-{year}"
+        with SEASON_CATALOG_LOCK:
+            lock = SEASON_CATALOG_LOCKS.setdefault(catalog_key, threading.Lock())
+        with lock:
+            return self._fetch_season_catalog(season, year, force_refresh)
 
-                term = q.casefold().strip()
-                if not term:
-                    return raw
-                local_media = []
-                with sqlite3.connect(DB_PATH) as conn:
-                    rows = conn.execute("SELECT raw_json FROM media").fetchall()
-                for (raw_json,) in rows:
-                    try:
-                        media = json.loads(raw_json)
-                    except json.JSONDecodeError:
-                        continue
-                    title = media.get("title") or {}
-                    haystack = " ".join(
-                        str(value) for value in (
-                            title.get("english"), title.get("romaji"), title.get("native"), media.get("description")
-                        ) if value
-                    ).casefold()
-                    if term in haystack:
-                        local_media.append(media)
-                return {"data": {"Page": {"media": local_media[:20]}}}
+    def _fetch_season_catalog(
+        self,
+        season: str,
+        year: int,
+        force_refresh: bool,
+    ) -> dict:
+        stale = False
+        media: list[dict] = []
+        first_key = f"season-v2-{season}-{year}-p1.json"
+        try:
+            first_page = self.fetch_season(season, year, 1, force_refresh)
+        except UpstreamAPIError:
+            first_page = cache_get_stale(first_key)
+            if first_page is None:
+                raise
+            stale = True
+
+        first_data = ((first_page.get("data") or {}).get("Page") or {})
+        page_info = first_data.get("pageInfo") or {}
+        media.extend(first_data.get("media") or [])
+        last_page = max(1, int(page_info.get("lastPage") or 1))
+
+        for page_number in range(2, last_page + 1):
+            key = f"season-v2-{season}-{year}-p{page_number}.json"
+            try:
+                page_data = self.fetch_season(season, year, page_number, force_refresh)
+            except UpstreamAPIError:
+                page_data = cache_get_stale(key)
+                stale = True
+                if page_data is None:
+                    continue
+            page = ((page_data.get("data") or {}).get("Page") or {})
+            media.extend(page.get("media") or [])
+
+        return {"pageInfo": page_info, "media": media, "stale": stale}
 
     def media_details(self, media_id: int) -> dict:
         key = f"media-{media_id}.json"
@@ -1299,6 +1518,7 @@ def compact_media(media: dict, lang: str) -> dict:
 
 def enrich_show(show: dict, sub_map: dict[int, dict], dub_map: dict[int, dict], dub_feed: dict[int, dict]) -> dict:
     sid = int(show["id"])
+    now = now_utc()
     sub = sub_map.get(sid) or {}
     dub = dub_map.get(sid)
     feed = dub_feed.get(sid) or {}
@@ -1308,40 +1528,169 @@ def enrich_show(show: dict, sub_map: dict[int, dict], dub_map: dict[int, dict], 
     sub_nodes = ((sub.get("airingSchedule") or {}).get("nodes")) or []
     upcoming_sub = []
     latest_sub_aired = None
+    last_sub_event = None
     for node in sub_nodes:
         when = parse_airing(node.get("airingAt"))
         ep = node.get("episode")
         if when is None or ep is None:
             continue
         upcoming_sub.append({"episode": ep, "at": when.isoformat(), "ts": int(when.timestamp())})
-        if when <= now_utc():
+        if when <= now:
             latest_sub_aired = ep if latest_sub_aired is None else max(latest_sub_aired, ep)
+            if last_sub_event is None or when.timestamp() > last_sub_event["ts"]:
+                last_sub_event = {"episode": ep, "at": when.isoformat(), "ts": int(when.timestamp())}
     if next_sub_ep and latest_sub_aired is None:
         latest_sub_aired = max(0, int(next_sub_ep) - 1)
     if show.get("nextSubAt") and show.get("nextSubEpisode"):
         when = parse_airing(show.get("nextSubAt"))
-        if when:
-            upcoming_sub = [{"episode": show["nextSubEpisode"], "at": when.isoformat(), "ts": int(when.timestamp())}] + [
-                n for n in upcoming_sub if n.get("episode") != show["nextSubEpisode"]
-            ]
+        has_scheduled_next = any(
+            int(node.get("episode") or 0) == int(show["nextSubEpisode"])
+            and int(node.get("ts") or 0) > int(now.timestamp())
+            for node in upcoming_sub
+        )
+        if when and when > now and not has_scheduled_next:
+            next_node = {
+                "episode": show["nextSubEpisode"],
+                "at": when.isoformat(),
+                "ts": int(when.timestamp()),
+            }
+            if not any(node.get("episode") == next_node["episode"] and node.get("ts") == next_node["ts"] for node in upcoming_sub):
+                upcoming_sub.append(next_node)
     sub_aired = latest_sub_aired
     if sub_aired is None and next_sub_ep:
         sub_aired = max(0, int(next_sub_ep) - 1)
     if sub_aired is None and total and show.get("status") == "FINISHED":
         sub_aired = total
+    final_events = {}
+    episode_total = int(total or (dub or {}).get("episodes") or 0)
+    cached_media_details = None
+    if not episode_total:
+        scheduled_numbers = [
+            int(node["episode"])
+            for node in sub_nodes
+            if node.get("episode") is not None
+        ]
+        if scheduled_numbers:
+            episode_total = max(scheduled_numbers)
+        else:
+            cached_media_details = cache_get_stale(f"media-{sid}.json") or {}
+            cached_media = ((cached_media_details.get("data") or {}).get("Media")) or {}
+            episode_total = int(cached_media.get("episodes") or 0)
+            if not episode_total:
+                cached_numbers = [
+                    int(node["episode"])
+                    for node in ((cached_media.get("airingSchedule") or {}).get("nodes") or [])
+                    if node.get("episode") is not None
+                ]
+                episode_total = max(cached_numbers, default=0)
+    if episode_total:
+        final_sub_candidates = [
+            node for node in upcoming_sub
+            if int(node.get("episode") or 0) == episode_total and node.get("at")
+        ]
+        if not final_sub_candidates:
+            if cached_media_details is None:
+                cached_media_details = cache_get_stale(f"media-{sid}.json") or {}
+            media = ((cached_media_details.get("data") or {}).get("Media")) or {}
+            final_sub_candidates = [
+                {
+                    "episode": node.get("episode"),
+                    "at": parse_airing(node.get("airingAt")).isoformat(),
+                    "ts": int(parse_airing(node.get("airingAt")).timestamp()),
+                }
+                for node in ((media.get("airingSchedule") or {}).get("nodes") or [])
+                if int(node.get("episode") or 0) == episode_total
+                and parse_airing(node.get("airingAt")) is not None
+            ]
+        if final_sub_candidates:
+            final_events["sub"] = max(final_sub_candidates, key=lambda event: int(event.get("ts") or 0))
     dub_ep_num = None
     dub_at = None
     dub_delayed = False
+    upcoming_dub = []
+    last_dub_event = None
     if dub:
         dub_ep_num = dub.get("episodeNumber")
         dub_at = parse_airing(dub.get("episodeDate"))
         dub_delayed = bool(dub.get("delayedIndefinitely") or dub.get("delayedText"))
         inner = ((dub.get("media") or {}).get("media")) or {}
+        dub_nodes = ((inner.get("airingSchedule") or {}).get("nodes")) or []
+        for node in dub_nodes:
+            when = parse_airing(node.get("airingAt"))
+            episode = node.get("episode")
+            if when is None or episode is None:
+                continue
+            upcoming_dub.append({
+                "episode": episode,
+                "at": when.isoformat(),
+                "ts": int(when.timestamp()),
+            })
+        feed_episode = feed.get("episode") or {}
+        feed_at = parse_airing(feed_episode.get("airedAt"))
+        feed_episode_number = feed_episode.get("aired")
+        if feed_at is not None and feed_at <= now and feed_episode_number is not None:
+            last_dub_event = {
+                "episode": feed_episode_number,
+                "at": feed_at.isoformat(),
+                "ts": int(feed_at.timestamp()),
+            }
+        if dub_at is not None and dub_at <= now and dub_ep_num is not None:
+            if last_dub_event is None or dub_at.timestamp() > last_dub_event["ts"]:
+                last_dub_event = {
+                    "episode": dub_ep_num,
+                    "at": dub_at.isoformat(),
+                    "ts": int(dub_at.timestamp()),
+                }
+        if (
+            last_dub_event is None
+            and feed_episode_number is not None
+            and (feed.get("episode") or {}).get("airedAt") is None
+        ):
+            last_dub_event = {"episode": feed_episode_number}
         if not show.get("cover"):
             cover = inner.get("coverImage") or {}
             show["cover"] = cover.get("extraLarge") or cover.get("medium")
             show["color"] = show.get("color") or cover.get("color")
     feed_aired = ((feed.get("episode") or {}).get("aired"))
+    feed_at = parse_airing((feed.get("episode") or {}).get("airedAt"))
+    if episode_total and feed_aired is not None and int(feed_aired) >= episode_total and feed_at is not None:
+        final_events["dub"] = {
+            "episode": episode_total,
+            "at": feed_at.isoformat(),
+            "ts": int(feed_at.timestamp()),
+        }
+    elif episode_total and dub_ep_num is not None and int(dub_ep_num) >= episode_total and dub_at is not None:
+        final_events["dub"] = {
+            "episode": episode_total,
+            "at": dub_at.isoformat(),
+            "ts": int(dub_at.timestamp()),
+        }
+
+    def estimate_finale(next_event: dict | None) -> dict | None:
+        if not next_event or not episode_total:
+            return None
+        episode = int(next_event.get("episode") or 0)
+        when = parse_airing(next_event.get("at"))
+        if episode <= 0 or episode > episode_total or when is None:
+            return None
+        estimated_at = when + timedelta(weeks=episode_total - episode)
+        return {
+            "episode": episode_total,
+            "at": estimated_at.isoformat(),
+            "ts": int(estimated_at.timestamp()),
+            "estimated": True,
+        }
+
+    if episode_total and "sub" not in final_events:
+        future_sub = [node for node in upcoming_sub if node.get("ts") and node["ts"] > now.timestamp()]
+        if future_sub:
+            final_events["sub"] = estimate_finale(min(future_sub, key=lambda node: node["ts"]))
+    if episode_total and "dub" not in final_events:
+        future_dub = [node for node in upcoming_dub if node.get("ts") and node["ts"] > now.timestamp()]
+        if not future_dub and dub_at is not None and dub_at > now and dub_ep_num is not None:
+            future_dub = [{"episode": dub_ep_num, "at": dub_at.isoformat(), "ts": int(dub_at.timestamp())}]
+        if future_dub:
+            final_events["dub"] = estimate_finale(min(future_dub, key=lambda node: node["ts"]))
     dub_aired = feed_aired
     if dub_aired is None and dub_ep_num is not None:
         if dub_at and dub_at > now_utc():
@@ -1358,20 +1707,18 @@ def enrich_show(show: dict, sub_map: dict[int, dict], dub_map: dict[int, dict], 
     if sub_aired is not None and dub_aired is not None:
         lag = max(0, int(sub_aired) - int(dub_aired))
     next_events = []
-    if next_sub_at:
-        when = next_sub_at if isinstance(next_sub_at, datetime) else parse_airing(next_sub_at)
-        if when:
-            next_events.append({"kind": "sub", "episode": next_sub_ep, "at": when.isoformat(), "ts": int(when.timestamp())})
-    if not any(e["kind"] == "sub" for e in next_events):
-        future_sub = [n for n in upcoming_sub if n.get("ts") and n["ts"] >= time.time() - 3600]
-        if future_sub:
-            nxt = min(future_sub, key=lambda n: n["ts"])
-            next_events.append({"kind": "sub", "episode": nxt["episode"], "at": nxt["at"], "ts": nxt["ts"]})
+    future_sub = [n for n in upcoming_sub if n.get("ts") and n["ts"] > now.timestamp()]
+    if future_sub:
+        nxt = min(future_sub, key=lambda n: n["ts"])
+        next_events.append({"kind": "sub", "episode": nxt["episode"], "at": nxt["at"], "ts": nxt["ts"]})
     if dub_at and dub_ep_num and not (dub.get("delayedIndefinitely") if dub else False):
         next_events.append({"kind": "dub", "episode": dub_ep_num, "at": dub_at.isoformat(), "ts": int(dub_at.timestamp())})
     tagged_day = None
     candidate_events = []
-    for ev in next_events + [{"at": n["at"], "ts": n["ts"]} for n in upcoming_sub]:
+    for ev in next_events + [
+        {"at": node["at"], "ts": node["ts"]}
+        for node in upcoming_sub + upcoming_dub
+    ]:
         when = parse_airing(ev.get("at"))
         if when is not None:
             candidate_events.append(when.astimezone(timezone.utc))
@@ -1388,6 +1735,12 @@ def enrich_show(show: dict, sub_map: dict[int, dict], dub_map: dict[int, dict], 
         "dubDelayed": dub_delayed,
         "nextEvents": sorted(next_events, key=lambda e: e["ts"]),
         "upcomingSub": upcoming_sub[:8],
+        "upcomingDub": upcoming_dub[:8],
+        "lastEvents": {
+            **({"sub": last_sub_event} if last_sub_event else {}),
+            **({"dub": last_dub_event} if last_dub_event else {}),
+        },
+        "finalEvents": final_events,
         "hasDubSchedule": dub is not None,
         "airDay": tagged_day,
     })

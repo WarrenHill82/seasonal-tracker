@@ -5,34 +5,23 @@
     if (Number.isFinite(scheduleAired)) return Math.min(Math.max(0, scheduleAired), total);
     let aired = Number(kind === 'dub' ? show.dubAired : show.subAired);
     if (!Number.isFinite(aired)) aired = 0;
-    let nextEp = null;
-    let nextAt = null;
-    if (kind === 'dub') {
-      const ev = (show.nextEvents || []).find(function (e) { return e.kind === 'dub'; });
-      if (ev) { nextEp = ev.episode; nextAt = ev.at; }
-    } else {
-      const ev = (show.nextEvents || []).find(function (e) { return (e.kind || 'sub') === 'sub'; });
-      nextEp = (ev && ev.episode) || show.nextSubEpisode;
-      nextAt = (ev && ev.at) || show.nextSubAt;
-    }
-    if (nextEp != null) {
-      const t = nextAt ? new Date(nextAt) : null;
-      const pending = t && !Number.isNaN(t.getTime()) && t.getTime() > Date.now();
-      const fromNext = pending ? Number(nextEp) - 1 : Number(nextEp);
-      if (Number.isFinite(fromNext)) aired = Math.max(aired, fromNext);
-    }
+    const now = Date.now();
+    let horizon = now;
     if (state.range === 'next_week' || state.range === 'week_after') {
-      const end = state.schedule && state.schedule.end ? new Date(state.schedule.end) : null;
-      if (end && nextEp != null && nextAt) {
-        let at = new Date(nextAt);
-        let ep = Number(nextEp);
-        if (!Number.isNaN(at.getTime()) && at.getTime() <= Date.now()) {
-          at = new Date(at.getTime() + 7 * 24 * 3600 * 1000);
-          ep += 1;
-        }
-        if (!Number.isNaN(at.getTime()) && at <= end) aired = Math.max(aired, ep);
-      }
+      const end = state.schedule && state.schedule.end ? new Date(state.schedule.end).getTime() : NaN;
+      if (Number.isFinite(end)) horizon = end;
     }
+    const events = (show.nextEvents || []).filter(function (event) {
+      return (event.kind || 'sub') === kind;
+    });
+    events.push.apply(events, kind === 'sub' ? (show.upcomingSub || []) : (show.upcomingDub || []));
+    events.forEach(function (event) {
+      if (event.episode == null || !event.at) return;
+      const at = new Date(event.at).getTime();
+      const episode = Number(event.episode);
+      if (!Number.isFinite(at) || !Number.isFinite(episode)) return;
+      if (at <= horizon) aired = Math.max(aired, episode);
+    });
     return Math.min(Math.max(0, aired), total);
   }
   window.airedNow = airedNow;
@@ -52,7 +41,7 @@
     tip.innerHTML = html;
     tip.classList.remove('hidden');
     const r = el.getBoundingClientRect();
-    tip.style.left = Math.max(8, Math.min(r.left, innerWidth - 320)) + 'px';
+    tip.style.left = Math.max(8, Math.min(r.left, innerWidth - 460)) + 'px';
     tip.style.top = Math.min(r.bottom + 8, innerHeight - 120) + 'px';
   }
   function hideTip() {

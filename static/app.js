@@ -8,6 +8,10 @@ const state = {
   pickerHasNext: false,
   pickerSeason: null,
   pickerYear: null,
+  pickerCatalog: [],
+  pickerCatalogKey: null,
+  pickerCatalogExpiresAt: 0,
+  pickerCatalogStale: false,
   searchTimer: null,
   notifications: [],
 };
@@ -110,8 +114,12 @@ async function api(path, opts = {}) {
       data = {};
     }
     if (!res.ok) {
-      const err = new Error(data.error || data.message || res.statusText || `HTTP ${res.status}`);
+      const retryAfter = Number(data.retryAfter || res.headers.get("Retry-After")) || null;
+      const message = data.error || data.message || res.statusText || `HTTP ${res.status}`;
+      const err = new Error(retryAfter ? `${message}. Retry in ${Math.ceil(retryAfter)} seconds.` : message);
       err.status = res.status;
+      err.upstreamStatus = data.upstreamStatus;
+      err.retryAfter = retryAfter;
       err.__reported = true;
       reportError(err, `Request failed: ${path}`);
       throw err;
@@ -170,32 +178,60 @@ function showHasDub(show) {
   return (show.dubAired || 0) > 0 || !!show.hasDubSchedule || (show.nextEvents || []).some((event) => event.kind === "dub");
 }
 
+function airingTimestamp(value) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0 && (typeof value === "number" || /^\d{10,13}$/.test(String(value)))) {
+    return numeric < 1e12 ? numeric * 1000 : numeric;
+  }
+  return new Date(value).getTime();
+}
+
 function nextAirEvent(show, kind) {
-  const now = Date.now() - 60 * 1000;
-  const events = (show.nextEvents || []).concat(kind === "sub" ? (show.upcomingSub || []) : []);
+  const now = Date.now();
+  const scheduled = kind === "sub" ? (show.upcomingSub || []) : (show.upcomingDub || []);
+  const events = (show.nextEvents || []).concat(scheduled);
   const matches = events
     .filter((event) => {
-      if (!event || !event.at || (kind === "dub" && event.kind !== "dub") || (kind === "sub" && event.kind && event.kind !== "sub")) return false;
-      return new Date(event.at).getTime() >= now;
+      if (!event || !event.at || (event.kind && event.kind !== kind)) return false;
+      return airingTimestamp(event.at) > now;
     })
-    .sort((a, b) => new Date(a.at) - new Date(b.at));
+    .sort((a, b) => airingTimestamp(a.at) - airingTimestamp(b.at));
   if (matches[0]) return matches[0];
-  if (kind === "sub" && show.nextSubAt && new Date(show.nextSubAt).getTime() >= now) {
-    return { at: show.nextSubAt, episode: show.nextSubEpisode };
+  if (kind === "sub" && show.nextSubAt && airingTimestamp(show.nextSubAt) > now) {
+    return { at: new Date(airingTimestamp(show.nextSubAt)).toISOString(), episode: show.nextSubEpisode };
   }
   return null;
 }
 
 function cardTitleTip(show) {
-  const parts = [];
-  const sub = nextAirEvent(show, "sub");
-  const dub = nextAirEvent(show, "dub");
-  parts.push(`<strong>${show.title}</strong>`);
-  parts.push(`<span class="chip sub">${sub ? `SUB ep ${sub.episode || "?"} · ${fmtDateTime(sub.at)}` : "SUB finished"}</span>`);
-  if (showHasDub(show) || dub) {
-    parts.push(`<span class="chip dub">${dub ? `DUB ep ${dub.episode || "?"} · ${fmtDateTime(dub.at)}` : "DUB finished"}</span>`);
+  const total = Number(show.episodes);
+  const aired = (kind) => typeof window.airedNow === "function"
+    ? window.airedNow(show, kind)
+    : Number(show[kind === "sub" ? "subAired" : "dubAired"] || 0);
+  const tooltipCell = (kind, label, value) =>
+    `<div class="tooltip-airing-cell"><strong>${label}:</strong><span class="tooltip-airing-date">${value}</span></div>`;
+  const nextValue = (kind) => {
+    const event = nextAirEvent(show, kind);
+    if (event) return `Ep ${event.episode || "?"} · ${fmtDateTime(event.at)}`;
+    if (kind === "dub") return null;
+    return total > 0 && aired(kind) >= total ? "Season complete" : "No date listed";
+  };
+  const cells = [];
+  const subNext = nextValue("sub");
+  const dubNext = nextValue("dub");
+  if (subNext) cells.push(tooltipCell("sub", "SUB Next", subNext));
+  if (dubNext) cells.push(tooltipCell("dub", "DUB Next", dubNext));
+  const finalSub = show.finalEvents?.sub;
+  const finalDub = show.finalEvents?.dub;
+  if (finalSub?.at) {
+    const label = finalSub.estimated ? "SUB Final Episode (est.)" : "SUB Final Episode";
+    cells.push(tooltipCell("sub", label, `${finalSub.episode || total} · ${fmtDateTime(finalSub.at)}`));
   }
-  return `${parts[0]}<div class="meta">${parts.slice(1).join("")}</div>`;
+  if (finalDub?.at) {
+    const label = finalDub.estimated ? "DUB Final Episode (est.)" : "DUB Final Episode";
+    cells.push(tooltipCell("dub", label, `${finalDub.episode || total} · ${fmtDateTime(finalDub.at)}`));
+  }
+  return `<strong>${show.title}</strong><div class="tooltip-airing-grid">${cells.join("")}</div>`;
 }
 
 function placeHoverTip(html, element) {
@@ -204,7 +240,7 @@ function placeHoverTip(html, element) {
   tip.innerHTML = html;
   tip.classList.remove("hidden");
   const rect = element.getBoundingClientRect();
-  tip.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - 320))}px`;
+  tip.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - 460))}px`;
   tip.style.top = `${Math.min(rect.bottom + 8, innerHeight - 120)}px`;
 }
 
@@ -761,6 +797,9 @@ async function setProgress(show, kind, value) {
 }
 
 function markPickerItem(id, inLibrary) {
+  state.pickerCatalog = state.pickerCatalog.map((item) =>
+    Number(item.id) === Number(id) ? { ...item, inLibrary } : item,
+  );
   document.querySelectorAll("#picker-grid .pick").forEach((el) => {
     if (Number(el.dataset.id) === Number(id)) {
       el.classList.toggle("in", inLibrary);
@@ -808,7 +847,7 @@ function fillSeasonSelect() {
     button.textContent = item.textContent;
     items.forEach((li) => li.classList.toggle("active", li === item));
     sel.classList.remove("open");
-    loadPicker();
+    if (!$("#drawer").classList.contains("hidden")) loadPicker();
   };
   button.textContent = current.replace("-", " ");
   button.addEventListener("click", (ev) => {
@@ -910,29 +949,72 @@ function renderPick(m) {
 async function loadPicker(query) {
   const grid = $("#picker-grid");
   const scrollTop = grid.scrollTop;
-  grid.innerHTML = "<p class='hint'>Loading titles…</p>";
+  const term = (query ?? $("#search").value).trim().toLocaleLowerCase();
+  const key = `${state.pickerSeason}-${state.pickerYear}`;
   try {
-    let media;
-    if (query) {
-      media = (await api(`/api/search?q=${encodeURIComponent(query)}&season=${state.pickerSeason}&year=${state.pickerYear}`)).media;
-      $("#page-info").textContent = `${media.length} results`;
-      state.pickerHasNext = false;
-    } else {
-      const data = await api(`/api/season?season=${state.pickerSeason}&year=${state.pickerYear}&page=${state.pickerPage}`);
-      media = data.media;
-      const p = data.pageInfo || {};
-      state.pickerHasNext = Boolean(p.hasNextPage);
-      $("#page-info").textContent = `${state.pickerSeason} ${state.pickerYear} · page ${p.currentPage || state.pickerPage}`;
+    if (state.pickerCatalogKey !== key || Date.now() >= state.pickerCatalogExpiresAt) {
+      grid.innerHTML = "<p class='hint'>Loading season catalog…</p>";
+      const data = await api(`/api/season/catalog?season=${state.pickerSeason}&year=${state.pickerYear}`);
+      if (key !== `${state.pickerSeason}-${state.pickerYear}`) return;
+      state.pickerCatalog = data.media || [];
+      state.pickerCatalogKey = key;
+      state.pickerCatalogStale = Boolean(data.stale);
+      state.pickerCatalogExpiresAt = Date.now() + (data.stale ? 60_000 : 3 * 60 * 60 * 1000);
     }
-    $("#page-prev").disabled = !query && state.pickerPage <= 1;
-    $("#page-next").disabled = Boolean(query) || !state.pickerHasNext;
+    if (
+      key !== `${state.pickerSeason}-${state.pickerYear}` ||
+      term !== $("#search").value.trim().toLocaleLowerCase()
+    ) return;
+
+    const filtered = term
+      ? state.pickerCatalog.filter((item) => [item.title, ...Object.values(item.titles || {})]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase()
+        .includes(term))
+      : state.pickerCatalog;
+    const pageCount = Math.max(1, Math.ceil(filtered.length / 50));
+    state.pickerPage = Math.max(1, Math.min(state.pickerPage, pageCount));
+    const media = filtered.slice((state.pickerPage - 1) * 50, state.pickerPage * 50);
+    state.pickerHasNext = state.pickerPage < pageCount;
+    const pageLabel = term
+      ? `${filtered.length} results · page ${state.pickerPage}/${pageCount}`
+      : `${state.pickerSeason} ${state.pickerYear} · page ${state.pickerPage}/${pageCount}`;
+    $("#page-info").textContent = pageLabel + (state.pickerCatalogStale ? " · stale cache" : "");
+    $("#page-prev").disabled = state.pickerPage <= 1;
+    $("#page-next").disabled = !state.pickerHasNext;
     grid.innerHTML = "";
     media.forEach((m) => grid.appendChild(renderPick(m)));
-    if (!media.length) grid.innerHTML = "<p class='hint'>No titles on this page.</p>";
+    if (!media.length) grid.innerHTML = `<p class="hint">${term ? "No matching titles." : "No titles in this season."}</p>`;
     grid.scrollTop = scrollTop;
   } catch (err) {
     if (!err.__reported) reportError(err, "Could not load catalog");
     grid.innerHTML = `<p class="hint">Could not load catalog: ${err.message}</p>`;
+  }
+}
+
+async function refreshPickerCatalog() {
+  const button = $("#picker-refresh");
+  if (!button || button.disabled) return;
+  const season = state.pickerSeason;
+  const year = state.pickerYear;
+  button.disabled = true;
+  button.classList.add("spinning");
+  try {
+    const data = await api(`/api/season/catalog?season=${season}&year=${year}&refresh=1`);
+    if (season !== state.pickerSeason || year !== state.pickerYear) return;
+    state.pickerCatalog = data.media || [];
+    state.pickerCatalogKey = `${season}-${year}`;
+    state.pickerCatalogStale = Boolean(data.stale);
+    state.pickerCatalogExpiresAt = Date.now() + (data.stale ? 60_000 : 3 * 60 * 60 * 1000);
+    state.pickerPage = 1;
+    await loadPicker();
+    toast(data.stale ? "Refresh unavailable; showing cached titles" : "Catalog refreshed");
+  } catch (_) {
+    // The shared API handler reports upstream failures in Notifications.
+  } finally {
+    button.disabled = false;
+    button.classList.remove("spinning");
   }
 }
 
@@ -1073,6 +1155,17 @@ function initializePanelWindows() {
     closeButton.title = "Close";
     closeButton.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>';
     header.appendChild(actions);
+    if (definition.key === "picker") {
+      const refreshButton = document.createElement("button");
+      refreshButton.type = "button";
+      refreshButton.id = "picker-refresh";
+      refreshButton.className = "panel-refresh";
+      refreshButton.setAttribute("aria-label", "Refresh season catalog");
+      refreshButton.title = "Refresh season catalog";
+      refreshButton.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 7a6.5 6.5 0 0 0-11.2-2L3 7m0-4v4h4m-3 6a6.5 6.5 0 0 0 11.2 2L17 13m0 4v-4h-4" /></svg>';
+      refreshButton.addEventListener("click", refreshPickerCatalog);
+      actions.appendChild(refreshButton);
+    }
     actions.append(pinButton, closeButton);
 
     pinButton.addEventListener("click", () => {
@@ -1259,14 +1352,13 @@ function wire() {
       const pick = btn.dataset.pick;
       state.settings = await api("/api/settings", { method: "POST", body: JSON.stringify({ pickerLayout: pick }) });
       applyTheme();
-      const q = $("#search").value.trim();
-      loadPicker(q.length >= 2 ? q : null);
+      loadPicker();
     });
   });
   $("#search").addEventListener("input", (ev) => {
     clearTimeout(state.searchTimer);
-    const q = ev.target.value.trim();
-    state.searchTimer = setTimeout(() => loadPicker(q.length >= 2 ? q : null), 280);
+    state.pickerPage = 1;
+    state.searchTimer = setTimeout(() => loadPicker(ev.target.value), 120);
   });
   $("#page-prev").addEventListener("click", () => {
     state.pickerPage = Math.max(1, state.pickerPage - 1);

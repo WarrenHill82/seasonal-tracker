@@ -39,6 +39,169 @@ def test_finished_show_keeps_its_last_known_airing_event() -> None:
     assert out["nextEvents"][0]["episode"] == 2
 
 
+def test_enrich_show_carries_upcoming_dub_airing_schedule() -> None:
+    from datetime import timedelta
+
+    from tracker_lib import now_utc
+
+    last_at = now_utc() - timedelta(hours=1)
+    next_at = now_utc() + timedelta(days=7)
+    show = {
+        "id": 42,
+        "title": "Dub Schedule Test",
+        "episodes": 12,
+        "status": "RELEASING",
+        "dubAired": 4,
+    }
+    dub_schedule = {
+        42: {
+            "episodeNumber": 4,
+            "episodeDate": last_at.isoformat(),
+            "media": {
+                "media": {
+                    "airingSchedule": {
+                        "nodes": [{"episode": 5, "airingAt": next_at.isoformat()}]
+                    }
+                }
+            },
+        }
+    }
+
+    out = enrich_show(show, {}, dub_schedule, {42: {"episode": {"aired": 4}}})
+
+    assert out["dubAired"] == 4
+    assert out["upcomingDub"][0]["episode"] == 5
+    assert out["lastEvents"]["dub"]["episode"] == 4
+    assert out["lastEvents"]["dub"]["at"] == last_at.isoformat()
+
+
+def test_enrich_show_prefers_newer_sub_schedule_over_stale_anilist_time() -> None:
+    from datetime import timedelta
+
+    from tracker_lib import now_utc
+
+    now = now_utc()
+    stale_at = now - timedelta(days=7)
+    last_at = now - timedelta(hours=1)
+    next_at = now + timedelta(days=7)
+    show = {
+        "id": 84,
+        "title": "Stale Next Episode Test",
+        "episodes": 19,
+        "status": "RELEASING",
+        "subAired": 17,
+        "nextSubEpisode": 18,
+        "nextSubAt": stale_at.isoformat(),
+    }
+    sub_schedule = {
+        84: {
+            "airingSchedule": {
+                "nodes": [
+                    {"episode": 17, "airingAt": last_at.isoformat()},
+                    {"episode": 18, "airingAt": next_at.isoformat()},
+                ]
+            }
+        }
+    }
+
+    out = enrich_show(show, sub_schedule, {}, {})
+
+    assert out["subAired"] == 17
+    assert out["nextEvents"][0]["episode"] == 18
+    assert out["nextEvents"][0]["at"] == next_at.isoformat()
+    assert out["lastEvents"]["sub"]["episode"] == 17
+
+
+def test_enrich_show_includes_finale_dates_only_when_available(monkeypatch, tmp_path) -> None:
+    import json
+
+    import tracker_lib
+
+    monkeypatch.setattr(tracker_lib, "CACHE_DIR", tmp_path / "cache")
+    cache_path = tracker_lib.CACHE_DIR / "media-42.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({
+        "data": {
+            "Media": {
+                "airingSchedule": {
+                    "nodes": [{"episode": 12, "airingAt": "2026-09-23T12:30:00Z"}]
+                }
+            }
+        }
+    }))
+    show = {"id": 42, "title": "Finale Date Test", "episodes": 12, "status": "FINISHED"}
+    dub_schedule = {42: {"episodeNumber": 12, "episodeDate": "2026-09-24T13:30:00Z"}}
+    dub_feed = {42: {"episode": {"aired": 12, "airedAt": "2026-09-24T13:30:00Z"}}}
+
+    out = tracker_lib.enrich_show(show, {}, dub_schedule, dub_feed)
+
+    assert out["finalEvents"]["sub"]["episode"] == 12
+    assert out["finalEvents"]["sub"]["at"] == "2026-09-23T12:30:00+00:00"
+    assert out["finalEvents"]["dub"]["episode"] == 12
+    assert out["finalEvents"]["dub"]["at"] == "2026-09-24T13:30:00+00:00"
+
+
+def test_enrich_show_estimates_dub_finale_from_scheduled_episode() -> None:
+    from datetime import timedelta
+
+    from tracker_lib import now_utc
+
+    next_at = now_utc() + timedelta(days=7)
+    show = {"id": 43, "title": "Dub Finale Estimate Test", "episodes": 12, "status": "RELEASING"}
+    dub_schedule = {
+        43: {
+            "episodeNumber": 4,
+            "episodeDate": (next_at - timedelta(days=7)).isoformat(),
+            "episodes": 12,
+            "media": {"media": {"airingSchedule": {"nodes": [{"episode": 5, "airingAt": next_at.isoformat()}]}}},
+        }
+    }
+
+    out = enrich_show(show, {}, dub_schedule, {43: {"episode": {"aired": 4}}})
+    estimated = out["finalEvents"]["dub"]
+
+    assert estimated["episode"] == 12
+    assert estimated["estimated"] is True
+    assert estimated["at"] == (next_at + timedelta(weeks=7)).isoformat()
+
+
+def test_enrich_show_infers_episode_total_for_new_show_finale_estimate() -> None:
+    from datetime import timedelta
+
+    from tracker_lib import enrich_show, now_utc
+
+    next_at = now_utc() + timedelta(days=7)
+    sub_nodes = [
+        {"episode": episode, "airingAt": (next_at + timedelta(weeks=episode - 2)).isoformat()}
+        for episode in range(2, 13)
+    ]
+    show = {
+        "id": 43,
+        "title": "New Show With Unknown Total",
+        "episodes": None,
+        "status": "RELEASING",
+        "nextSubEpisode": 2,
+        "nextSubAt": next_at.isoformat(),
+    }
+    sub_schedule = {43: {"airingSchedule": {"nodes": sub_nodes}}}
+    dub_schedule = {
+        43: {
+            "episodeNumber": 1,
+            "episodeDate": (next_at - timedelta(days=7)).isoformat(),
+            "media": {"media": {"airingSchedule": {"nodes": [{"episode": 2, "airingAt": next_at.isoformat()}]}}},
+        }
+    }
+
+    out = enrich_show(show, sub_schedule, dub_schedule, {43: {"episode": {"aired": 1}}})
+
+    assert out["episodes"] is None
+    assert out["finalEvents"]["sub"]["episode"] == 12
+    assert out["finalEvents"]["sub"]["at"] == (next_at + timedelta(weeks=10)).isoformat()
+    assert out["finalEvents"]["dub"]["episode"] == 12
+    assert out["finalEvents"]["dub"]["estimated"] is True
+    assert out["finalEvents"]["dub"]["at"] == (next_at + timedelta(weeks=10)).isoformat()
+
+
 def test_cache_round_trip_uses_sqlite(monkeypatch, tmp_path) -> None:
     import tracker_lib
 
@@ -86,6 +249,161 @@ def test_concurrent_cache_writes_use_independent_temp_files(monkeypatch, tmp_pat
 
     result = json.loads((tracker_lib.CACHE_DIR / "shared.json").read_text())
     assert result["value"] in range(64)
+
+
+def test_upstream_429_sets_retry_after_cooldown(monkeypatch) -> None:
+    from email.message import Message
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    import pytest
+    import tracker_lib
+
+    url = "https://rate-limit-test.invalid/graphql"
+    host = "rate-limit-test.invalid"
+    headers = Message()
+    headers["Retry-After"] = "17"
+    error_body = b'{"errors":[{"message":"Too Many Requests.","status":429}]}'
+    calls = 0
+
+    def rate_limited(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise HTTPError(url, 429, "Too Many Requests", headers, BytesIO(error_body))
+
+    monkeypatch.setattr(tracker_lib, "urlopen", rate_limited)
+    monkeypatch.setitem(tracker_lib.UPSTREAM_COOLDOWN_UNTIL, host, 0)
+    monkeypatch.setitem(tracker_lib.UPSTREAM_NEXT_REQUEST, host, 0)
+
+    with pytest.raises(tracker_lib.UpstreamAPIError) as first:
+        tracker_lib.http_json(url, {"query": "{}"})
+    with pytest.raises(tracker_lib.UpstreamAPIError) as second:
+        tracker_lib.http_json(url, {"query": "{}"})
+
+    assert first.value.status == 429
+    assert first.value.retry_after == 17
+    assert second.value.retry_after is not None
+    assert calls == 1
+
+
+def test_http_json_retries_transient_failure_only_once(monkeypatch) -> None:
+    from urllib.error import URLError
+
+    import pytest
+    import tracker_lib
+
+    calls = 0
+
+    def unavailable(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise URLError("temporary outage")
+
+    monkeypatch.setattr(tracker_lib, "urlopen", unavailable)
+    monkeypatch.setattr(tracker_lib, "UPSTREAM_RETRY_DELAY", 0)
+    monkeypatch.setitem(tracker_lib.UPSTREAM_REQUEST_INTERVALS, "retry-test.invalid", 0)
+
+    with pytest.raises(tracker_lib.UpstreamAPIError, match="temporary outage"):
+        tracker_lib.http_json("https://retry-test.invalid/graphql", {"query": "{}"})
+
+    assert calls == 2
+
+
+def test_http_json_surfaces_graphql_errors_in_success_response(monkeypatch) -> None:
+    import json
+
+    import pytest
+    import tracker_lib
+
+    class FakeResponse:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({"errors": [{"message": "Invalid query", "status": 400}]}).encode()
+
+    monkeypatch.setattr(tracker_lib, "urlopen", lambda *args, **kwargs: FakeResponse())
+
+    with pytest.raises(tracker_lib.UpstreamAPIError, match="Invalid query") as error:
+        tracker_lib.http_json("https://graphql-error-test.invalid/graphql", {"query": "{}"})
+
+    assert error.value.status == 400
+
+
+def test_stale_cache_fallback_returns_old_data_and_throttles_warnings(monkeypatch, tmp_path) -> None:
+    import json
+
+    import tracker_lib
+
+    monkeypatch.setattr(tracker_lib, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(tracker_lib, "ERROR_LOG_PATH", tmp_path / "errors.log")
+    monkeypatch.setattr(tracker_lib, "STALE_CACHE_WARNING_AT", {})
+    cache_path = tracker_lib.CACHE_DIR / "media-42.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps({"data": {"Media": {"id": 42}}}))
+    error = tracker_lib.UpstreamAPIError("graphql.anilist.co", "temporarily unavailable", 503)
+
+    assert tracker_lib.stale_cache_fallback("media-42.json", error) == {"data": {"Media": {"id": 42}}}
+    assert tracker_lib.stale_cache_fallback("media-42.json", error) == {"data": {"Media": {"id": 42}}}
+    assert tracker_lib.read_error_log().count("Using stale upstream cache") == 1
+
+
+def test_season_catalog_caches_all_pages_for_three_hours_and_force_refreshes(monkeypatch, tmp_path) -> None:
+    import os
+    import time
+
+    import tracker_lib
+
+    monkeypatch.setattr(tracker_lib, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(tracker_lib, "LIBRARY_PATH", tmp_path / "library.json")
+    monkeypatch.setattr(tracker_lib, "SETTINGS_PATH", tmp_path / "settings.json")
+    monkeypatch.setattr(tracker_lib, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(tracker_lib, "DB_PATH", tmp_path / "tracker.db")
+    tracker_lib.ensure_database()
+
+    requests = []
+    hub = tracker_lib.DataHub()
+
+    def anilist(query, variables):
+        page = variables["page"]
+        requests.append(page)
+        media = {
+            "id": page,
+            "title": {"english": f"Page {page}"},
+            "season": "FALL",
+            "seasonYear": 2026,
+        }
+        return {
+            "data": {
+                "Page": {
+                    "pageInfo": {"currentPage": page, "lastPage": 2, "hasNextPage": page < 2},
+                    "media": [media],
+                }
+            }
+        }
+
+    monkeypatch.setattr(hub, "anilist", anilist)
+
+    first = hub.fetch_season_catalog("FALL", 2026)
+    second = hub.fetch_season_catalog("FALL", 2026)
+    assert [item["id"] for item in first["media"]] == [1, 2]
+    assert [item["id"] for item in second["media"]] == [1, 2]
+    assert requests == [1, 2]
+    assert tracker_lib.SEASON_CATALOG_TTL == 3 * 60 * 60
+
+    stale_time = time.time() - tracker_lib.SEASON_CATALOG_TTL - 1
+    for page in (1, 2):
+        cache_file = tracker_lib.CACHE_DIR / f"season-v2-FALL-2026-p{page}.json"
+        os.utime(cache_file, (stale_time, stale_time))
+    hub.fetch_season_catalog("FALL", 2026)
+    hub.fetch_season_catalog("FALL", 2026, force_refresh=True)
+
+    assert requests == [1, 2, 1, 2, 1, 2]
 
 
 def test_media_tags_are_migrated_and_stored(monkeypatch, tmp_path) -> None:
@@ -204,6 +522,46 @@ def test_library_title_jap_comes_from_romaji(monkeypatch, tmp_path) -> None:
         ).fetchone()
 
     assert row == ("English Title", "Romaji Title")
+
+
+def test_removing_library_show_cleans_only_its_derived_rows(monkeypatch, tmp_path) -> None:
+    import sqlite3
+
+    import tracker_lib
+
+    monkeypatch.setattr(tracker_lib, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(tracker_lib, "DB_PATH", tmp_path / "tracker.db")
+    tracker_lib.ensure_database()
+    for anime_id in (42, 99):
+        tracker_lib.db_add_library_show({
+            "id": anime_id,
+            "title": f"Show {anime_id}",
+            "titles": {"english": f"Show {anime_id}"},
+        })
+        tracker_lib.store_media_records(
+            [{"id": anime_id, "title": {"english": f"Show {anime_id}"}}],
+            "FALL",
+            2026,
+        )
+
+    with sqlite3.connect(tracker_lib.DB_PATH) as conn:
+        conn.executemany(
+            """INSERT INTO weekly_schedule (
+                year, month, week_num, anime_id, anime_title, episode,
+                air_day, air_date, air_ts, source, fetched_at
+            ) VALUES (2026, 9, 1, ?, ?, 1, 'Tuesday', '2026-09-01', 1790000000, 'sub', 1)""",
+            [(42, "Show 42"), (99, "Show 99")],
+        )
+
+    remaining = tracker_lib.db_remove_library_show(42)
+
+    with sqlite3.connect(tracker_lib.DB_PATH) as conn:
+        media_ids = {row[0] for row in conn.execute("SELECT id FROM media")}
+        schedule_ids = {row[0] for row in conn.execute("SELECT DISTINCT anime_id FROM weekly_schedule")}
+
+    assert [show["id"] for show in remaining] == [99]
+    assert media_ids == {99}
+    assert schedule_ids == {99}
 
 
 def test_populate_weekly_schedule_filters_to_saved_library(monkeypatch, tmp_path) -> None:

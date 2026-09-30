@@ -24,7 +24,7 @@
       '.remain-tile small{font-size:8px!important;text-transform:uppercase!important;display:block!important;}',
       '.remain-tile.sub,.remain-tile.dub{background:color-mix(in srgb,#ff8a5b 22%,var(--card-2,#1c2430))!important;color:#ff8a5b!important;}',
       '.remain-tile.done{background:color-mix(in srgb,#3dd68c 22%,var(--card-2,#1c2430))!important;color:#3dd68c!important;}',
-      '.hover-tip{position:fixed!important;z-index:90!important;max-width:min(360px,80vw)!important;background:var(--bg-2,#151b24)!important;color:var(--text,#e8eef6)!important;border:1px solid var(--line,#2a3340)!important;border-radius:12px!important;padding:10px 12px!important;}',
+      '.hover-tip{position:fixed!important;z-index:90!important;max-width:min(440px,80vw)!important;background:var(--bg-2,#151b24)!important;color:var(--text,#e8eef6)!important;border:1px solid var(--line,#2a3340)!important;border-radius:12px!important;padding:10px 12px!important;}',
       '.hover-tip.hidden{display:none!important;}',
       '.statusbar{display:grid!important;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)!important;align-items:center!important;gap:8px!important;height:32px!important;}',
       '.statusbar .tools{margin-left:0!important;justify-self:end!important;display:flex!important;align-items:center!important;gap:4px!important;}',
@@ -109,7 +109,7 @@
     tip.innerHTML = html;
     tip.classList.remove('hidden');
     const r = el.getBoundingClientRect();
-    tip.style.left = Math.max(8, Math.min(r.left, innerWidth - 320)) + 'px';
+    tip.style.left = Math.max(8, Math.min(r.left, innerWidth - 460)) + 'px';
     tip.style.top = Math.min(r.bottom + 8, innerHeight - 120) + 'px';
   }
   function hideTip() {

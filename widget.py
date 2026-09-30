@@ -20,6 +20,7 @@ from tracker_lib import (
     DEFAULT_SETTINGS,
     LIBRARY_PATH,
     STATIC,
+    UpstreamAPIError,
     build_library_schedule,
     build_maps,
     compact_media,
@@ -44,6 +45,7 @@ from tracker_lib import (
     sync_library_schedule,
     write_error_log,
     SETTINGS_PATH,
+    UPSTREAM_REQUEST_PRIORITY,
 )
 
 class Handler(SimpleHTTPRequestHandler):
@@ -61,14 +63,40 @@ class Handler(SimpleHTTPRequestHandler):
         if '" 4' in message or '" 5' in message:
             write_error_log("HTTP error", message)
 
-    def _send(self, code: int, payload: Any) -> None:
+    def _send(
+        self,
+        code: int,
+        payload: Any,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         raw = json.dumps(payload).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(raw)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(raw)
+
+    def _send_upstream_error(self, exc: UpstreamAPIError) -> None:
+        write_error_log(
+            f"{exc.provider} request failed",
+            detail=f"upstream_status={exc.status}; retry_after={exc.retry_after}; {exc}",
+        )
+        headers = {}
+        if exc.retry_after is not None:
+            headers["Retry-After"] = str(max(1, int(exc.retry_after + 0.999)))
+        self._send(
+            503 if exc.status == 429 else 502,
+            {
+                "error": str(exc),
+                "provider": exc.provider,
+                "upstreamStatus": exc.status,
+                "retryAfter": exc.retry_after,
+            },
+            headers,
+        )
 
     def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
@@ -106,6 +134,27 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/library":
                 self._send(200, self._library_payload())
                 return
+            if path == "/api/season/catalog":
+                season = (q.get("season") or [season_of()[0]])[0].upper()
+                year = int((q.get("year") or [season_of()[1]])[0])
+                force_refresh = (q.get("refresh") or ["0"])[0] == "1"
+                catalog = HUB.fetch_season_catalog(season, year, force_refresh)
+                lang = load_settings().get("titleLanguage", "english")
+                media = [compact_media(item, lang) for item in catalog["media"]]
+                selected = {int(show["id"]) for show in load_library()}
+                for item in media:
+                    item["inLibrary"] = item["id"] in selected
+                self._send(
+                    200,
+                    {
+                        "pageInfo": catalog["pageInfo"],
+                        "media": media,
+                        "season": season,
+                        "year": year,
+                        "stale": catalog["stale"],
+                    },
+                )
+                return
             if path == "/api/season":
                 season = (q.get("season") or [season_of()[0]])[0].upper()
                 year = int((q.get("year") or [season_of()[1]])[0])
@@ -118,24 +167,6 @@ class Handler(SimpleHTTPRequestHandler):
                 for m in media:
                     m["inLibrary"] = m["id"] in selected
                 self._send(200, {"pageInfo": page_data.get("pageInfo"), "media": media, "season": season, "year": year})
-                return
-            if path == "/api/search":
-                term = (q.get("q") or [""])[0].strip()
-                if len(term) < 2:
-                    self._send(200, {"media": []})
-                    return
-                season = (q.get("season") or [None])[0]
-                year = int((q.get("year") or ["0"])[0]) or None
-                raw = HUB.search(term, season=season, year=year)
-                page = ((raw.get("data") or {}).get("Page") or {})
-                if not page.get("media") and (season or year):
-                    raw = HUB.search(term)
-                lang = load_settings().get("titleLanguage", "english")
-                media = [compact_media(m, lang) for m in (((raw.get("data") or {}).get("Page") or {}).get("media") or [])]
-                selected = {int(s["id"]) for s in load_library()}
-                for m in media:
-                    m["inLibrary"] = m["id"] in selected
-                self._send(200, {"media": media})
                 return
             if path == "/api/schedule":
                 offset = int((q.get("offset") or ["0"])[0] or 0)
@@ -158,6 +189,9 @@ class Handler(SimpleHTTPRequestHandler):
                     show.update({k: lib[mid][k] for k in ("watchedSub", "watchedDub", "note", "nexusUrl") if k in lib[mid]})
                 self._send(200, enrich_show(show, sub_map, dub_map, dub_feed))
                 return
+        except UpstreamAPIError as exc:
+            self._send_upstream_error(exc)
+            return
         except HTTPError as exc:
             write_error_log("GET request failed", exc=exc)
             self._send(502, {"error": f"upstream {exc.code}", "detail": str(exc)})
@@ -236,7 +270,6 @@ class Handler(SimpleHTTPRequestHandler):
                 sid = int(body["id"])
                 save_library([s for s in load_library() if int(s["id"]) != sid])
                 db_remove_library_show(sid)
-                build_library_schedule()
                 self._send(200, self._library_payload())
                 return
             if parsed.path == "/api/library/progress":
@@ -256,6 +289,9 @@ class Handler(SimpleHTTPRequestHandler):
                 db_update_library_progress(sid, **body)
                 self._send(200, self._library_payload())
                 return
+        except UpstreamAPIError as exc:
+            self._send_upstream_error(exc)
+            return
         except Exception as exc:  # noqa: BLE001
             write_error_log("POST request failed", exc=exc)
             self._send(500, {"error": str(exc)})
@@ -307,17 +343,23 @@ def open_window(url: str, width: int, height: int) -> None:
     webbrowser.open(url)
 
 
+def refresh_startup_schedule() -> None:
+    priority_token = UPSTREAM_REQUEST_PRIORITY.set(1)
+    try:
+        build_library_schedule()
+    except Exception as exc:  # noqa: BLE001
+        write_error_log("Startup schedule refresh failed", exc=exc)
+        print(f"Schedule refresh skipped: {exc}", file=sys.stderr)
+    finally:
+        UPSTREAM_REQUEST_PRIORITY.reset(priority_token)
+
+
 def main() -> None:
     # --no-browser is what the systemd user unit passes so plasmashell (or
     # launch-window.sh) can attach to an already-running local server.
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     STATIC.mkdir(parents=True, exist_ok=True)
-    try:
-        build_library_schedule()
-    except Exception as exc:  # noqa: BLE001
-        write_error_log("Startup schedule refresh failed", exc=exc)
-        print(f"Schedule refresh skipped: {exc}", file=sys.stderr)
 
     port = int(os.environ.get("SEASONAL_TRACKER_PORT", "8765"))
     host = os.environ.get("SEASONAL_TRACKER_HOST", "127.0.0.1")
@@ -326,6 +368,11 @@ def main() -> None:
         port = int(sys.argv[sys.argv.index("--port") + 1])
 
     httpd = ThreadingHTTPServer((host, port), Handler)
+    threading.Thread(
+        target=refresh_startup_schedule,
+        name="startup-schedule-refresh",
+        daemon=True,
+    ).start()
     url = f"http://{host}:{port}/"
     print(f"Seasonal Tracker  →  {url}")
     print(f"Library file      →  {LIBRARY_PATH}")

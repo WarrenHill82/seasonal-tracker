@@ -37,8 +37,9 @@
       </div>
     </footer>
   </div>
-  <aside id="drawer" class="drawer drawer-picker hidden">
-    <div class="drawer-head"><h2>Add seasonal shows</h2><button type="button" id="drawer-close">Close</button></div>
+  <div id="panel-backdrop" class="panel-backdrop hidden" aria-hidden="true"></div>
+  <aside id="drawer" class="drawer drawer-picker panel-window hidden">
+    <div class="drawer-head"><h2 id="drawer-title">Add seasonal shows</h2><button type="button" id="drawer-close">Close</button></div>
     <div class="panel-content">
       <div class="picker-bar">
         <div id="season-select" class="select season-select"></div>
@@ -53,11 +54,9 @@
       <button type="button" data-zoom="75" aria-label="75 percent content size" title="75%" aria-pressed="true"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" /></svg></button>
       <button type="button" data-zoom="100" aria-label="100 percent content size" title="100%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1" /></svg></button>
     </div>
-    <div class="picker-resize-handle picker-resize-left" data-resize-from="left" aria-hidden="true"></div>
-    <div class="picker-resize-handle picker-resize-right" data-resize-from="right" aria-hidden="true"></div>
   </aside>
-  <aside id="settings" class="drawer drawer-settings hidden">
-    <div class="drawer-head"><h2>Widget settings</h2><button type="button" id="settings-close">Close</button></div>
+  <aside id="settings" class="drawer drawer-settings panel-window hidden">
+    <div class="drawer-head"><h2 id="settings-title">Widget settings</h2><button type="button" id="settings-close">Close</button></div>
     <form id="settings-form" class="settings-form">
       <button type="button" id="btn-add" class="primary">Add shows</button>
       <label>Theme<div class="select" data-name="theme"><button type="button" class="select-btn"></button><ul class="select-menu"><li data-value="dark">Dark widget</li><li data-value="light">Light</li></ul><input type="hidden" name="theme" /></div></label>
@@ -72,20 +71,27 @@
       <button type="button" data-zoom="100" aria-label="100 percent content size" title="100%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1" /></svg></button>
     </div>
   </aside>
-  <aside id="notify-panel" class="notify-panel hidden" aria-live="polite">
+  <aside id="notify-panel" class="notify-panel panel-window hidden" aria-live="polite">
     <div class="notify-head">
-      <h2>Notifications</h2>
+      <h2 id="notify-title">Notifications</h2>
       <button type="button" id="notify-close">Close</button>
     </div>
     <div id="notify-list" class="notify-list"></div>
+    <section class="notify-log-section" aria-label="Error log">
+      <div class="notify-log-head">
+        <strong>Error log</strong>
+        <button type="button" id="notify-clear-log" title="Clear persisted errors">Clear log</button>
+      </div>
+      <pre id="notify-error-log" class="notify-error-log">Loading…</pre>
+    </section>
     <div class="zoom-control panel-zoom" id="notify-zoom" role="group" aria-label="Notification content size">
       <button type="button" data-zoom="50" aria-label="50 percent content size" title="50%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="6" height="6" rx="1" /></svg></button>
       <button type="button" data-zoom="75" aria-label="75 percent content size" title="75%" aria-pressed="true"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" /></svg></button>
       <button type="button" data-zoom="100" aria-label="100 percent content size" title="100%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1" /></svg></button>
     </div>
   </aside>
-  <aside id="show-details" class="drawer show-details hidden">
-    <div class="drawer-head"><h2>Show details</h2><button type="button" id="show-details-close">Close</button></div>
+  <aside id="show-details" class="drawer show-details panel-window hidden">
+    <div class="drawer-head"><h2 id="details-title">Show details</h2><button type="button" id="show-details-close">Close</button></div>
     <div id="show-details-content" class="show-details-content"></div>
     <div class="zoom-control panel-zoom" id="details-zoom" role="group" aria-label="Details content size">
       <button type="button" data-zoom="50" aria-label="50 percent content size" title="50%" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="6" height="6" rx="1" /></svg></button>

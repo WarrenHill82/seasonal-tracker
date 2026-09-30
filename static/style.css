@@ -50,6 +50,13 @@ html, body {
 
 body.drawer-open #app { opacity: 0.42; pointer-events: none; user-select: none; }
 
+.panel-backdrop {
+  position: fixed; inset: 0; z-index: 19; background: rgba(0, 0, 0, 0);
+  transition: background-color 180ms ease;
+}
+.panel-backdrop.visible { background: rgba(0, 0, 0, 0.38); }
+.panel-backdrop.hidden { display: none; }
+
 button, input, select {
   font: inherit;
   color: inherit;
@@ -338,11 +345,9 @@ button.active:hover { background: var(--text); }
   overflow: hidden;
   min-height: 0;
 }
+.panel-window { resize: none; }
 .drawer.hidden { display: none; }
 .show-details { inset: auto; width: min(520px, 92vw); height: min(70vh, 620px); max-height: calc(100vh - 24px); z-index: 25; }
-.show-details .drawer-head { cursor: grab; touch-action: none; user-select: none; }
-.show-details .drawer-head:active { cursor: grabbing; }
-.show-details .drawer-head button { cursor: pointer; }
 .show-details-content {
   flex: 1 1 auto;
   min-height: 0;
@@ -381,13 +386,27 @@ button.active:hover { background: var(--text); }
 .drawer-picker { width: 75vw; max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); resize: none; }
 .drawer-head { display: flex; justify-content: space-between; align-items: center; flex: 0 0 auto; }
 .drawer-head h2 { margin: 0; font-size: 16px; line-height: 1.35; }
-.drawer, .notify-panel, .hover-tip { resize: both; }
-.drawer.drawer-picker { resize: none; }
-.drawer { min-width: 280px; min-height: 180px; }
-.picker-resize-handle { position: absolute; bottom: 2px; z-index: 5; width: 18px; height: 18px; touch-action: none; }
-.picker-resize-left { left: 2px; cursor: nesw-resize; border-bottom: 2px solid var(--muted); border-left: 2px solid var(--muted); }
-.picker-resize-right { right: 2px; cursor: nwse-resize; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); }
-.picker-resize-handle:hover { border-color: var(--accent); }
+.drawer { min-width: min(280px, calc(100vw - 16px)); min-height: min(180px, calc(100vh - 16px)); }
+.drawer-settings { height: min(70vh, 540px); }
+.hover-tip { resize: both; }
+.panel-head { gap: 10px; cursor: grab; touch-action: none; user-select: none; }
+.panel-head:active { cursor: grabbing; }
+.panel-head h2 { flex: 1 1 auto; min-width: 0; }
+.panel-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
+.panel-actions button { display: grid; place-items: center; width: 28px; height: 28px; min-width: 28px; padding: 5px; border-radius: 7px; }
+.panel-actions svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.panel-pin { color: var(--muted); }
+.panel-pin.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, var(--card)); }
+.panel-close { color: var(--text); }
+.panel-close:hover { color: #ff7777; }
+.panel-resize-handle { position: absolute; z-index: 8; touch-action: none; }
+.panel-resize-nw, .panel-resize-ne, .panel-resize-sw, .panel-resize-se { width: 18px; height: 18px; }
+.panel-resize-nw { top: 2px; left: 2px; cursor: nwse-resize; border-top: 2px solid var(--muted); border-left: 2px solid var(--muted); }
+.panel-resize-ne { top: 2px; right: 2px; cursor: nesw-resize; border-top: 2px solid var(--muted); border-right: 2px solid var(--muted); }
+.panel-resize-sw { bottom: 2px; left: 2px; cursor: nesw-resize; border-bottom: 2px solid var(--muted); border-left: 2px solid var(--muted); }
+.panel-resize-se { right: 2px; bottom: 2px; cursor: nwse-resize; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); }
+.panel-resize-s { bottom: 2px; left: 22px; width: 42px; height: 8px; cursor: ns-resize; border-top: 2px solid var(--muted); }
+.panel-resize-handle:hover { border-color: var(--accent); }
 .panel-content { min-width: 0; min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; overflow: hidden; }
 .zoom-control { display: flex; align-items: center; justify-content: center; gap: 3px; flex: 0 0 auto; padding: 4px 0; }
 .zoom-control button { display: grid; place-items: center; width: 22px; height: 22px; min-width: 22px; padding: 3px; border-radius: 5px; color: var(--muted); }
@@ -553,7 +572,16 @@ button.active:hover { background: var(--text); }
   background: var(--bg-2); border: 1px solid var(--line);
   border-radius: 16px; box-shadow: 0 16px 28px rgba(0,0,0,0.35); z-index: 40;
   overflow: hidden;
+  resize: none;
 }
+.panel-window.drawer-picker,
+.panel-window.drawer-settings,
+.panel-window.notify-panel,
+.panel-window.show-details {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+}
+.notify-panel { min-width: min(280px, calc(100vw - 16px)); min-height: min(180px, calc(100vh - 16px)); }
 .notify-panel::before {
   content: ""; position: absolute; right: 18px; bottom: -10px; width: 20px; height: 20px;
   background: var(--bg-2); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
@@ -565,7 +593,12 @@ button.active:hover { background: var(--text); }
   padding: 10px 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg-2) 86%, var(--card));
 }
 .notify-head h2 { margin: 0; font-size: 13px; }
-.notify-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; min-height: 0; padding: 10px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg-2); }
+.notify-list { display: flex; flex: 1 1 0; flex-direction: column; gap: 8px; min-height: 0; padding: 10px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg-2); }
+.notify-log-section { display: flex; flex: 1 1 0; flex-direction: column; min-height: 80px; border-top: 1px solid var(--line); }
+.notify-log-head { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; }
+.notify-log-head strong { font-size: 11px; }
+.notify-log-head button { padding: 3px 8px; font-size: 10px; }
+.notify-error-log { flex: 1 1 auto; min-height: 0; margin: 0; padding: 0 10px 8px; overflow: auto; color: var(--text); font: 10px/1.4 monospace; white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg-2); }
 .notify-item {
   display: flex; flex-direction: column; gap: 5px; border: 1px solid var(--line);
   border-radius: 12px; padding: 8px 10px; background: var(--card); color: var(--text);

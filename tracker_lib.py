@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import tempfile
 import threading
 import time
 import traceback
@@ -51,6 +52,7 @@ DEFAULT_SETTINGS = {
     "cardSort": "name",
     "detailsPanelX": 0.5,
     "detailsPanelY": 0.5,
+    "panelState": {},
 }
 
 
@@ -68,6 +70,21 @@ def write_error_log(context: str, detail: str = "", exc: BaseException | None = 
     except OSError:
         # Logging must never prevent the application from serving requests.
         pass
+
+
+def read_error_log() -> str:
+    try:
+        with ERROR_LOG_LOCK:
+            return ERROR_LOG_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def clear_error_log() -> None:
+    ERROR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with ERROR_LOG_LOCK, ERROR_LOG_PATH.open("w", encoding="utf-8"):
+        pass
+
 
 SEASONS = ("WINTER", "SPRING", "SUMMER", "FALL")
 
@@ -1060,9 +1077,23 @@ def cache_set(name: str, data: Any) -> None:
     payload = json.dumps(data)
     ensure_database()
     path = CACHE_DIR / name
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(payload)
-    tmp.replace(path)
+    _atomic_write_text(path, payload)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            tmp.write(content)
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
 
 
 def load_json(path: Path, default: Any) -> Any:
@@ -1075,10 +1106,7 @@ def load_json(path: Path, default: Any) -> Any:
 
 
 def save_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(path)
+    _atomic_write_text(path, json.dumps(data, indent=2))
 
 
 def load_library() -> list[dict]:

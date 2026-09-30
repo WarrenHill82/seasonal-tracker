@@ -23,6 +23,7 @@ from tracker_lib import (
     build_library_schedule,
     build_maps,
     compact_media,
+    clear_error_log,
     db_show_details,
     db_add_library_show,
     db_remove_library_show,
@@ -35,6 +36,7 @@ from tracker_lib import (
     now_utc,
     parse_airing,
     pick_title,
+    read_error_log,
     save_json,
     save_library,
     schedule_view_payload,
@@ -79,6 +81,9 @@ class Handler(SimpleHTTPRequestHandler):
         path = parsed.path
         q = parse_qs(parsed.query)
         try:
+            if path == "/api/errors":
+                self._send(200, {"log": read_error_log()})
+                return
             if path == "/api/meta":
                 season, year = season_of()
                 nseason, nyear = next_season(season, year)
@@ -167,6 +172,10 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             body = self._read_json()
+            if parsed.path == "/api/errors/clear":
+                clear_error_log()
+                self._send(200, {"cleared": True})
+                return
             if parsed.path == "/api/client-error":
                 context = str(body.get("context") or "Browser error")[:300]
                 message = str(body.get("message") or "Unknown browser error")[:2000]

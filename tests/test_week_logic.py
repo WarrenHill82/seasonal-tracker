@@ -54,6 +54,40 @@ def test_cache_round_trip_uses_sqlite(monkeypatch, tmp_path) -> None:
     assert tracker_lib.cache_get("demo.json", 60) == {"a": 1, "b": [2, 3]}
 
 
+def test_error_log_can_be_read_and_cleared(monkeypatch, tmp_path) -> None:
+    import tracker_lib
+
+    monkeypatch.setattr(tracker_lib, "ERROR_LOG_PATH", tmp_path / "errors.log")
+
+    tracker_lib.write_error_log("Test error", detail="failure details")
+    assert "Test error" in tracker_lib.read_error_log()
+    assert "failure details" in tracker_lib.read_error_log()
+
+    tracker_lib.clear_error_log()
+    assert tracker_lib.read_error_log() == ""
+
+
+def test_concurrent_cache_writes_use_independent_temp_files(monkeypatch, tmp_path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    import json
+
+    import tracker_lib
+
+    monkeypatch.setattr(tracker_lib, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(tracker_lib, "ensure_database", lambda: None)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(
+            executor.map(
+                lambda value: tracker_lib.cache_set("shared.json", {"value": value}),
+                range(64),
+            )
+        )
+
+    result = json.loads((tracker_lib.CACHE_DIR / "shared.json").read_text())
+    assert result["value"] in range(64)
+
+
 def test_media_tags_are_migrated_and_stored(monkeypatch, tmp_path) -> None:
     import json
     import sqlite3

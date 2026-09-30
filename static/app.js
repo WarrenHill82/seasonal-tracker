@@ -67,7 +67,25 @@ function reportError(err, context = "Request failed") {
       stack: err && err.stack ? err.stack : "",
     }),
     keepalive: true,
-  }).catch(() => {});
+  })
+    .then(() => {
+      const panel = $("#notify-panel");
+      if (panel && !panel.classList.contains("hidden")) loadErrorLog();
+    })
+    .catch(() => {});
+}
+
+async function loadErrorLog() {
+  const log = $("#notify-error-log");
+  if (!log) return;
+  try {
+    const response = await fetch("/api/errors");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || response.statusText);
+    log.textContent = data.log || "No errors recorded.";
+  } catch (err) {
+    log.textContent = `Unable to load error log: ${err.message || err}`;
+  }
 }
 
 function toast(msg) {
@@ -574,16 +592,6 @@ async function openShowDetails(showId) {
   const content = $("#show-details-content");
   if (!panel || !content) return;
   panel.classList.remove("hidden");
-  const width = panel.offsetWidth;
-  const height = panel.offsetHeight;
-  const maxLeft = Math.max(8, innerWidth - width - 8);
-  const maxTop = Math.max(8, innerHeight - height - 8);
-  const xRatio = Number.isFinite(Number(state.settings.detailsPanelX)) ? Math.max(0, Math.min(1, Number(state.settings.detailsPanelX))) : 0.5;
-  const yRatio = Number.isFinite(Number(state.settings.detailsPanelY)) ? Math.max(0, Math.min(1, Number(state.settings.detailsPanelY))) : 0.5;
-  panel.style.right = "auto";
-  panel.style.bottom = "auto";
-  panel.style.left = `${8 + (maxLeft - 8) * xRatio}px`;
-  panel.style.top = `${8 + (maxTop - 8) * yRatio}px`;
   content.textContent = "Loading show details…";
   try {
     const show = await api(`/api/show/${showId}`);
@@ -975,105 +983,225 @@ function fillSettingsForm() {
 }
 
 function syncDrawerFade() {
-  const drawerOpen = !$("#drawer").classList.contains("hidden") || !$("#settings").classList.contains("hidden");
-  document.body.classList.toggle("drawer-open", drawerOpen);
+  const pickerOpen = !$("#drawer").classList.contains("hidden");
+  const dimBackdrop = !$("#settings").classList.contains("hidden") || !$("#notify-panel").classList.contains("hidden");
+  const backdrop = $("#panel-backdrop");
+  document.body.classList.toggle("drawer-open", pickerOpen);
+  if (!backdrop) return;
+  if (dimBackdrop) {
+    clearTimeout(backdrop.hideTimer);
+    backdrop.classList.remove("hidden");
+    requestAnimationFrame(() => backdrop.classList.add("visible"));
+  } else {
+    backdrop.classList.remove("visible");
+    backdrop.hideTimer = setTimeout(() => backdrop.classList.add("hidden"), 180);
+  }
 }
 
-function enablePanelDragging(panel, handle) {
-  if (!panel || !handle) return;
-  handle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || event.target.closest("button")) return;
-    const rect = panel.getBoundingClientRect();
-    const startX = event.clientX;
-    const startY = event.clientY;
-    let moved = false;
-    const onMove = (moveEvent) => {
-      if (moveEvent.pointerId !== event.pointerId) return;
-      moved = true;
-      const maxLeft = Math.max(8, innerWidth - rect.width - 8);
-      const maxTop = Math.max(8, innerHeight - rect.height - 8);
-      panel.style.right = "auto";
-      panel.style.bottom = "auto";
-      panel.style.left = `${Math.max(8, Math.min(maxLeft, rect.left + moveEvent.clientX - startX))}px`;
-      panel.style.top = `${Math.max(8, Math.min(maxTop, rect.top + moveEvent.clientY - startY))}px`;
-    };
-    const stop = () => {
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", stop);
-      document.removeEventListener("pointercancel", stop);
-      if (!moved) return;
-      const rect = panel.getBoundingClientRect();
-      const maxLeft = Math.max(8, innerWidth - rect.width - 8);
-      const maxTop = Math.max(8, innerHeight - rect.height - 8);
-      const position = {
-        detailsPanelX: maxLeft === 8 ? 0 : (rect.left - 8) / (maxLeft - 8),
-        detailsPanelY: maxTop === 8 ? 0 : (rect.top - 8) / (maxTop - 8),
-      };
-      state.settings = { ...state.settings, ...position };
-      api("/api/settings", { method: "POST", body: JSON.stringify(position) })
-        .then((settings) => { state.settings = { ...settings, ...state.settings }; })
-        .catch(() => {});
-    };
-    event.preventDefault();
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", stop);
-    document.addEventListener("pointercancel", stop);
-  });
+function savePanelState(key, panel) {
+  const rect = panel.getBoundingClientRect();
+  const maxLeft = Math.max(0, innerWidth - rect.width - 16);
+  const maxTop = Math.max(0, innerHeight - rect.height - 16);
+  const panelState = {
+    ...(state.settings.panelState || {}),
+    [key]: {
+      x: maxLeft ? Math.max(0, Math.min(1, (rect.left - 8) / maxLeft)) : 0,
+      y: maxTop ? Math.max(0, Math.min(1, (rect.top - 8) / maxTop)) : 0,
+      width: rect.width,
+      height: rect.height,
+      pinned: panel.classList.contains("is-pinned"),
+    },
+  };
+  state.settings = { ...state.settings, panelState };
+  api("/api/settings", { method: "POST", body: JSON.stringify({ panelState }) }).catch(() => {});
 }
 
-function enablePickerCornerResizing(panel) {
-  if (!panel) return;
-  panel.querySelectorAll(".picker-resize-handle").forEach((handle) => {
-    handle.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
+function applyPanelState(key, panel, minWidth, minHeight) {
+  let saved = state.settings.panelState?.[key];
+  if (!saved && key === "details") {
+    saved = { x: state.settings.detailsPanelX, y: state.settings.detailsPanelY };
+  }
+  if (!saved) return;
+
+  const width = parseFloat(getComputedStyle(panel).width) || minWidth;
+  const height = parseFloat(getComputedStyle(panel).height) || minHeight;
+  const safeWidth = Math.min(innerWidth - 16, Math.max(minWidth, Number(saved.width) || width));
+  const safeHeight = Math.min(innerHeight - 16, Math.max(minHeight, Number(saved.height) || height));
+  const maxLeft = Math.max(0, innerWidth - safeWidth - 16);
+  const maxTop = Math.max(0, innerHeight - safeHeight - 16);
+  const x = Math.max(0, Math.min(1, Number(saved.x) || 0));
+  const y = Math.max(0, Math.min(1, Number(saved.y) || 0));
+
+  panel.style.right = "auto";
+  panel.style.bottom = "auto";
+  panel.style.left = `${8 + maxLeft * x}px`;
+  panel.style.top = `${8 + maxTop * y}px`;
+  if (saved.width) panel.style.width = `${safeWidth}px`;
+  if (saved.height) panel.style.height = `${safeHeight}px`;
+  panel.classList.toggle("is-pinned", !!saved.pinned);
+}
+
+function initializePanelWindows() {
+  const definitions = [
+    { key: "picker", selector: "#drawer", close: "#drawer-close", minWidth: 280, minHeight: 180 },
+    { key: "settings", selector: "#settings", close: "#settings-close", minWidth: 280, minHeight: 180 },
+    { key: "notifications", selector: "#notify-panel", close: "#notify-close", minWidth: 280, minHeight: 180 },
+    { key: "details", selector: "#show-details", close: "#show-details-close", minWidth: 280, minHeight: 180 },
+  ];
+
+  definitions.forEach((definition) => {
+    const panel = $(definition.selector);
+    const header = panel?.querySelector(".drawer-head, .notify-head");
+    const closeButton = panel?.querySelector(definition.close);
+    if (!panel || !header || !closeButton) return;
+
+    const heading = header.querySelector("h2");
+    header.classList.add("panel-head");
+    panel.setAttribute("role", "dialog");
+    if (heading?.id) panel.setAttribute("aria-labelledby", heading.id);
+    panel.setAttribute("aria-modal", definition.key === "settings" || definition.key === "notifications" ? "true" : "false");
+
+    const actions = document.createElement("div");
+    actions.className = "panel-actions";
+    const pinButton = document.createElement("button");
+    pinButton.type = "button";
+    pinButton.className = "panel-pin";
+    pinButton.setAttribute("aria-label", "Pin panel in place");
+    pinButton.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3h6l-1 4 3 3v1H5v-1l3-3-1-4Zm3 8v6" /></svg>';
+    closeButton.className = "panel-close";
+    closeButton.setAttribute("aria-label", "Close panel");
+    closeButton.title = "Close";
+    closeButton.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>';
+    header.appendChild(actions);
+    actions.append(pinButton, closeButton);
+
+    pinButton.addEventListener("click", () => {
+      panel.classList.toggle("is-pinned");
+      const pinned = panel.classList.contains("is-pinned");
+      pinButton.setAttribute("aria-pressed", String(pinned));
+      pinButton.setAttribute("aria-label", pinned ? "Unpin panel" : "Pin panel in place");
+      pinButton.title = pinned ? "Unpin panel" : "Pin panel in place";
+      savePanelState(definition.key, panel);
+    });
+    closeButton.addEventListener("click", () => {
+      panel.classList.add("hidden");
+      syncDrawerFade();
+    });
+
+    applyPanelState(definition.key, panel, definition.minWidth, definition.minHeight);
+    const pinned = panel.classList.contains("is-pinned");
+    pinButton.classList.toggle("active", pinned);
+    pinButton.setAttribute("aria-pressed", String(pinned));
+    pinButton.setAttribute("aria-label", pinned ? "Unpin panel" : "Pin panel in place");
+    pinButton.title = pinned ? "Unpin panel" : "Pin panel in place";
+
+    header.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || panel.classList.contains("is-pinned") || event.target.closest("button, a, input, select")) return;
       const rect = panel.getBoundingClientRect();
-      const fromLeft = handle.dataset.resizeFrom === "left";
+      const startX = event.clientX;
+      const startY = event.clientY;
+      let moved = false;
       const onMove = (moveEvent) => {
         if (moveEvent.pointerId !== event.pointerId) return;
-        const minWidth = 280;
-        const minHeight = 180;
-        const right = fromLeft ? rect.right : Math.min(moveEvent.clientX, innerWidth - 8);
-        const left = fromLeft ? Math.max(8, Math.min(moveEvent.clientX, rect.right - minWidth)) : rect.left;
-        const width = Math.max(minWidth, right - left);
-        const maxBottom = Math.min(innerHeight - 8, rect.top + innerHeight - 24);
-        const bottom = Math.max(rect.top + minHeight, Math.min(moveEvent.clientY, maxBottom));
+        moved = true;
+        const left = Math.max(8, Math.min(innerWidth - rect.width - 8, rect.left + moveEvent.clientX - startX));
+        const top = Math.max(8, Math.min(innerHeight - rect.height - 8, rect.top + moveEvent.clientY - startY));
         panel.style.right = "auto";
         panel.style.bottom = "auto";
         panel.style.left = `${left}px`;
-        panel.style.top = `${rect.top}px`;
-        panel.style.width = `${width}px`;
-        panel.style.height = `${bottom - rect.top}px`;
+        panel.style.top = `${top}px`;
       };
       const stop = () => {
         document.removeEventListener("pointermove", onMove);
         document.removeEventListener("pointerup", stop);
         document.removeEventListener("pointercancel", stop);
+        if (moved) savePanelState(definition.key, panel);
       };
       event.preventDefault();
       document.addEventListener("pointermove", onMove);
       document.addEventListener("pointerup", stop);
       document.addEventListener("pointercancel", stop);
     });
+
+    ["nw", "ne", "sw", "se", "s"].forEach((direction) => {
+      const handle = document.createElement("div");
+      handle.className = `panel-resize-handle panel-resize-${direction}`;
+      handle.dataset.direction = direction;
+      handle.setAttribute("aria-hidden", "true");
+      panel.appendChild(handle);
+      handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        const rect = panel.getBoundingClientRect();
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const minWidth = Math.min(definition.minWidth, innerWidth - 16);
+        const minHeight = Math.min(definition.minHeight, innerHeight - 16);
+        const onMove = (moveEvent) => {
+          if (moveEvent.pointerId !== event.pointerId) return;
+          const dx = moveEvent.clientX - startX;
+          const dy = moveEvent.clientY - startY;
+          let left = rect.left;
+          let top = rect.top;
+          let right = rect.right;
+          let bottom = rect.bottom;
+          if (direction.includes("w")) left = Math.max(8, Math.min(rect.left + dx, right - minWidth));
+          if (direction.includes("e")) right = Math.min(innerWidth - 8, Math.max(rect.right + dx, left + minWidth));
+          if (direction.includes("n")) top = Math.max(8, Math.min(rect.top + dy, bottom - minHeight));
+          if (direction.includes("s")) bottom = Math.min(innerHeight - 8, Math.max(rect.bottom + dy, top + minHeight));
+          panel.style.right = "auto";
+          panel.style.bottom = "auto";
+          panel.style.left = `${left}px`;
+          panel.style.top = `${top}px`;
+          panel.style.width = `${right - left}px`;
+          panel.style.height = `${bottom - top}px`;
+        };
+        const stop = () => {
+          document.removeEventListener("pointermove", onMove);
+          document.removeEventListener("pointerup", stop);
+          document.removeEventListener("pointercancel", stop);
+          savePanelState(definition.key, panel);
+        };
+        event.preventDefault();
+        event.stopPropagation();
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup", stop);
+        document.addEventListener("pointercancel", stop);
+      });
+    });
+  });
+
+  $("#panel-backdrop")?.addEventListener("click", () => {
+    $("#settings").classList.add("hidden");
+    $("#notify-panel").classList.add("hidden");
+    syncDrawerFade();
   });
 }
 
 function wire() {
-  enablePickerCornerResizing($("#drawer"));
-  const showDetails = $("#show-details");
-  enablePanelDragging(showDetails, showDetails?.querySelector(".drawer-head"));
   const notifyPanel = $("#notify-panel");
-  const notifyClose = $("#notify-close");
   const notifyButton = $("#btn-notifications");
+  const clearLogButton = $("#notify-clear-log");
 
   if (notifyButton) {
     notifyButton.addEventListener("click", () => {
       if (!notifyPanel) return;
       notifyPanel.classList.toggle("hidden");
+      syncDrawerFade();
+      if (!notifyPanel.classList.contains("hidden")) loadErrorLog();
     });
   }
 
-  if (notifyClose) {
-    notifyClose.addEventListener("click", () => notifyPanel && notifyPanel.classList.add("hidden"));
+  if (clearLogButton) {
+    clearLogButton.addEventListener("click", async () => {
+      if (!window.confirm("Clear the error log?")) return;
+      try {
+        await api("/api/errors/clear", { method: "POST", body: "{}" });
+        const log = $("#notify-error-log");
+        if (log) log.textContent = "No errors recorded.";
+      } catch (_) {
+        // The shared API handler reports failures in Notifications.
+      }
+    });
   }
 
   wireSelects();
@@ -1084,8 +1212,8 @@ function wire() {
     $("#show-details").classList.add("hidden");
     if (notifyPanel) notifyPanel.classList.add("hidden");
     $("#hover-tip").classList.add("hidden");
-    closeSelects();
     syncDrawerFade();
+    closeSelects();
   });
   $("#btn-layout").addEventListener("click", async () => {
     const next = state.settings.layout === "stacks" ? "rows" : "stacks";
@@ -1100,20 +1228,11 @@ function wire() {
     loadPicker();
   };
   $("#btn-add").addEventListener("click", openPicker);
-  $("#drawer-close").addEventListener("click", () => {
-    $("#drawer").classList.add("hidden");
-    syncDrawerFade();
-  });
   $("#btn-settings").addEventListener("click", () => {
     fillSettingsForm();
     $("#settings").classList.remove("hidden");
     syncDrawerFade();
   });
-  $("#settings-close").addEventListener("click", () => {
-    $("#settings").classList.add("hidden");
-    syncDrawerFade();
-  });
-  $("#show-details-close").addEventListener("click", () => $("#show-details").classList.add("hidden"));
   document.addEventListener("mousedown", (event) => {
     const panel = $("#show-details");
     if (!panel.classList.contains("hidden") && !panel.contains(event.target)) {
@@ -1164,6 +1283,8 @@ async function boot() {
   wire();
   state.meta = await api("/api/meta");
   state.settings = state.meta.settings || {};
+  initializePanelWindows();
+  syncDrawerFade();
   window.trackerSettingsReady = true;
   window.dispatchEvent(new Event("tracker-settings-ready"));
   setupZoomControls();

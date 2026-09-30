@@ -188,6 +188,7 @@ def ensure_database() -> None:
                 format TEXT,
                 status TEXT,
                 genres_json TEXT,
+                tags_json TEXT NOT NULL DEFAULT '[]',
                 average_score REAL,
                 duration INTEGER,
                 is_adult INTEGER,
@@ -200,6 +201,9 @@ def ensure_database() -> None:
             )
             """
         )
+        media_cols = {row[1] for row in conn.execute("PRAGMA table_info(media)").fetchall()}
+        if "tags_json" not in media_cols:
+            conn.execute("ALTER TABLE media ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS weekly_schedule (
@@ -338,6 +342,7 @@ def store_media_records(media_list: list[dict], season: str, year: int) -> None:
                 "format": item.get("format"),
                 "status": item.get("status"),
                 "genres_json": json.dumps(item.get("genres") or []),
+                "tags_json": json.dumps(item.get("tags") or []),
                 "average_score": item.get("averageScore"),
                 "duration": item.get("duration"),
                 "is_adult": 1 if item.get("isAdult") else 0,
@@ -352,13 +357,13 @@ def store_media_records(media_list: list[dict], season: str, year: int) -> None:
                 """
                 INSERT INTO media (
                     id, season_key, season, season_year, id_mal,
-                    title_json, episodes, format, status, genres_json,
+                    title_json, episodes, format, status, genres_json, tags_json,
                     average_score, duration, is_adult, site_url,
                     cover_image_json, next_airing_episode_json, start_date_json,
                     raw_json, fetched_at
                 ) VALUES (
                     :id, :season_key, :season, :season_year, :id_mal,
-                    :title_json, :episodes, :format, :status, :genres_json,
+                    :title_json, :episodes, :format, :status, :genres_json, :tags_json,
                     :average_score, :duration, :is_adult, :site_url,
                     :cover_image_json, :next_airing_episode_json, :start_date_json,
                     :raw_json, :fetched_at
@@ -373,6 +378,7 @@ def store_media_records(media_list: list[dict], season: str, year: int) -> None:
                     format = excluded.format,
                     status = excluded.status,
                     genres_json = excluded.genres_json,
+                    tags_json = excluded.tags_json,
                     average_score = excluded.average_score,
                     duration = excluded.duration,
                     is_adult = excluded.is_adult,
@@ -1098,7 +1104,7 @@ class DataHub:
         return http_json(ANILIST, {"query": query, "variables": variables or {}})
 
     def fetch_season(self, season: str, year: int, page: int = 1) -> dict:
-        key = f"season-{season}-{year}-p{page}.json"
+        key = f"season-v2-{season}-{year}-p{page}.json"
         cached = cache_get(key, ttl=6 * 3600)
         if cached is not None:
             media_page = ((cached.get("data") or {}).get("Page") or {}).get("media") or []
@@ -1111,7 +1117,7 @@ class DataHub:
             media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: POPULARITY_DESC) {
               id idMal title { romaji english native }
               description(asHtml: false)
-              episodes format status season seasonYear genres averageScore duration isAdult siteUrl
+              episodes format status season seasonYear genres tags { name rank isGeneralSpoiler isMediaSpoiler isAdult } averageScore duration isAdult siteUrl
               coverImage { large medium color }
               nextAiringEpisode { episode airingAt timeUntilAiring }
               startDate { year month day }
@@ -1132,7 +1138,7 @@ class DataHub:
                         media(search: $q, season: $season, seasonYear: $seasonYear, type: ANIME, sort: SEARCH_MATCH) {
                             id idMal title { romaji english native }
                             description(asHtml: false)
-                            episodes format status season seasonYear genres averageScore isAdult siteUrl
+                            episodes format status season seasonYear genres tags { name rank isGeneralSpoiler isMediaSpoiler isAdult } averageScore isAdult siteUrl
                             coverImage { large medium color }
                             nextAiringEpisode { episode airingAt timeUntilAiring }
                         }
@@ -1174,7 +1180,7 @@ class DataHub:
         query ($id: Int) {
           Media(id: $id, type: ANIME) {
             id idMal title { romaji english native }
-            episodes format status season seasonYear genres averageScore duration isAdult siteUrl
+            episodes format status season seasonYear genres tags { name rank isGeneralSpoiler isMediaSpoiler isAdult } averageScore duration isAdult siteUrl
             description(asHtml: false)
             coverImage { large medium color }
             bannerImage
@@ -1248,6 +1254,7 @@ def compact_media(media: dict, lang: str) -> dict:
         "season": media.get("season"),
         "seasonYear": media.get("seasonYear"),
         "genres": media.get("genres") or [],
+        "tags": media.get("tags") or [],
         "score": media.get("averageScore"),
         "duration": media.get("duration"),
         "isAdult": media.get("isAdult"),

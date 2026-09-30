@@ -825,7 +825,33 @@ function renderPick(m) {
   el.dataset.id = m.id;
   const meta = [m.format, m.episodes ? `${m.episodes} ep` : null, m.seasonYear].filter(Boolean).join(" · ");
   if (layout === "rows") {
-    el.innerHTML = `<img src="${m.cover || ""}" alt="" /><span>${m.title}<small>${meta}</small></span>`;
+    const image = document.createElement("img");
+    image.src = m.cover || "";
+    image.alt = "";
+    const details = document.createElement("span");
+    details.className = "pick-row-details";
+    const title = document.createElement("span");
+    title.className = "pick-row-title";
+    title.textContent = m.title || "Untitled";
+    const metadata = document.createElement("small");
+    metadata.textContent = meta;
+    const tags = (Array.isArray(m.tags) ? m.tags : [])
+      .filter((tag) => tag && tag.name && !tag.isGeneralSpoiler && !tag.isMediaSpoiler && !tag.isAdult)
+      .sort((a, b) => Number(b.rank || 0) - Number(a.rank || 0))
+      .slice(0, 4);
+    details.append(title, metadata);
+    if (tags.length) {
+      const tagLine = document.createElement("span");
+      tagLine.className = "pick-tags";
+      for (const tag of tags) {
+        const chip = document.createElement("span");
+        chip.className = "pick-tag";
+        chip.textContent = tag.name;
+        tagLine.appendChild(chip);
+      }
+      details.appendChild(tagLine);
+    }
+    el.append(image, details);
   } else {
     el.innerHTML = `<img src="${m.cover || ""}" alt="" /><span>${m.title}</span>`;
   }
@@ -995,7 +1021,44 @@ function enablePanelDragging(panel, handle) {
   });
 }
 
+function enablePickerCornerResizing(panel) {
+  if (!panel) return;
+  panel.querySelectorAll(".picker-resize-handle").forEach((handle) => {
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const rect = panel.getBoundingClientRect();
+      const fromLeft = handle.dataset.resizeFrom === "left";
+      const onMove = (moveEvent) => {
+        if (moveEvent.pointerId !== event.pointerId) return;
+        const minWidth = 280;
+        const minHeight = 180;
+        const right = fromLeft ? rect.right : Math.min(moveEvent.clientX, innerWidth - 8);
+        const left = fromLeft ? Math.max(8, Math.min(moveEvent.clientX, rect.right - minWidth)) : rect.left;
+        const width = Math.max(minWidth, right - left);
+        const maxBottom = Math.min(innerHeight - 8, rect.top + innerHeight - 24);
+        const bottom = Math.max(rect.top + minHeight, Math.min(moveEvent.clientY, maxBottom));
+        panel.style.right = "auto";
+        panel.style.bottom = "auto";
+        panel.style.left = `${left}px`;
+        panel.style.top = `${rect.top}px`;
+        panel.style.width = `${width}px`;
+        panel.style.height = `${bottom - rect.top}px`;
+      };
+      const stop = () => {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", stop);
+        document.removeEventListener("pointercancel", stop);
+      };
+      event.preventDefault();
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", stop);
+      document.addEventListener("pointercancel", stop);
+    });
+  });
+}
+
 function wire() {
+  enablePickerCornerResizing($("#drawer"));
   const showDetails = $("#show-details");
   enablePanelDragging(showDetails, showDetails?.querySelector(".drawer-head"));
   const notifyPanel = $("#notify-panel");

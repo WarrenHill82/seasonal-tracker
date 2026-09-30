@@ -20,7 +20,7 @@
   width: 26px; height: 26px; padding: 0; border-radius: 7px;
   display: grid; place-items: center; font-size: 13px;
 }
-.picker-bar .season-select { min-width: 150px; }
+.picker-bar .season-select { flex: 0 1 300px; width: min(300px, 100%); min-width: 0; }
 .picker-bar .season-select .select-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -30,7 +30,12 @@
   max-height: min(50vh, 360px);
   overflow-y: auto;
   margin: 0;
+  padding: 6px;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: var(--shadow);
 }
+.picker-bar .season-select .select-btn { min-height: 38px; border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--card)); font-weight: 650; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent); }
+.picker-bar .season-select .select-menu li:hover, .picker-bar .season-select .select-menu li.active { background: color-mix(in srgb, var(--accent) 16%, var(--card-2)); }
 .picker-grid .pick:hover { border-color: var(--accent); }
 .picker-grid .pick + #hover-tip { line-height: 1.45; }
 #btn-layout .i-bar { display: none; fill: currentColor; }

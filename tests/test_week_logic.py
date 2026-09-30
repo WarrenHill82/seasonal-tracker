@@ -54,6 +54,35 @@ def test_cache_round_trip_uses_sqlite(monkeypatch, tmp_path) -> None:
     assert tracker_lib.cache_get("demo.json", 60) == {"a": 1, "b": [2, 3]}
 
 
+def test_media_tags_are_migrated_and_stored(monkeypatch, tmp_path) -> None:
+    import json
+    import sqlite3
+
+    import tracker_lib
+
+    monkeypatch.setattr(tracker_lib, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(tracker_lib, "DB_PATH", tmp_path / "tracker.db")
+
+    tracker_lib.ensure_database()
+    with sqlite3.connect(tracker_lib.DB_PATH) as conn:
+        conn.execute("ALTER TABLE media DROP COLUMN tags_json")
+    tracker_lib.ensure_database()
+    with sqlite3.connect(tracker_lib.DB_PATH) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(media)")}
+    assert "tags_json" in columns
+
+    tags = [{"name": "Fantasy", "rank": 80}]
+    tracker_lib.store_media_records(
+        [{"id": 9, "title": {"english": "Tagged show"}, "tags": tags}],
+        "FALL",
+        2026,
+    )
+    with sqlite3.connect(tracker_lib.DB_PATH) as conn:
+        stored = conn.execute("SELECT tags_json FROM media WHERE id = 9").fetchone()[0]
+    assert json.loads(stored) == tags
+    assert tracker_lib.compact_media({"id": 9, "tags": tags}, "english")["tags"] == tags
+
+
 def test_zoom_settings_default_and_persist(monkeypatch, tmp_path) -> None:
     import tracker_lib
 
